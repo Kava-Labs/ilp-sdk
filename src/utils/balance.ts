@@ -137,16 +137,16 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   }
 
   public async sendData(data: Buffer) {
-    const next = this.plugin.sendData
+    const next = () => this.plugin.sendData(data)
 
     if (data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       const { amount } = IlpPacket.deserializeIlpPrepare(data)
 
       if (amount === '0') {
-        return next(data)
+        return next()
       }
 
-      const res = await next(data)
+      const res = await next()
 
       const packet = IlpPacket.deserializeIlpPacket(res)
       const isFulfill = res[0] === IlpPacket.Type.TYPE_ILP_FULFILL
@@ -176,7 +176,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
 
       return res
     } else {
-      return next(data)
+      return next()
     }
   }
 
@@ -211,14 +211,14 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   }
 
   private async handleData(data: Buffer) {
-    const next = this.dataHandler
+    const next = () => this.dataHandler(data)
 
     if (data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
       const { amount } = IlpPacket.deserializeIlpPrepare(data)
 
       // Ignore 0 amount packets
       if (amount === '0') {
-        return next(data)
+        return next()
       }
 
       try {
@@ -233,7 +233,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
         })
       }
 
-      const res = await next(data)
+      const res = await next()
 
       if (res[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
         // Allow this to throw if balance drops below minimum
@@ -243,15 +243,15 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
       }
     }
 
-    return next(data)
+    return next()
   }
 
   private handleMoney(amount: string) {
-    const next = this.moneyHandler
+    const next = () => this.moneyHandler(amount)
 
     // Allow this to throw if balance drops below minimum
     this.subBalance(amount)
-    return next(amount)
+    return next()
   }
 
   private async attemptSettle(): Promise<void> {
