@@ -1,7 +1,6 @@
 import BigNumber from 'bignumber.js'
-import { EventEmitter } from 'events'
+import EventEmitter = require('eventemitter3')
 import * as IlpPacket from 'ilp-packet'
-import { fetch } from 'ilp-protocol-ildcp'
 import { convert } from './convert'
 import { IDataHandler, ILogger, IMoneyHandler, IPlugin } from './types'
 
@@ -16,13 +15,25 @@ const defaultMoneyHandler = () => {
   throw new Error('no money handler registered')
 }
 
+export interface IBalanceWrapperOpts {
+  balance: {
+    maximum?: BigNumber.Value
+    settleTo?: BigNumber.Value
+    settleThreshold?: BigNumber.Value
+    minimum?: BigNumber.Value
+  }
+  plugin: IPlugin
+  assetCode: string
+  assetScale: number
+  log: ILogger
+}
+
 export class BalanceWrapper extends EventEmitter implements IPlugin {
   public static readonly version = 2
 
   private readonly plugin: IPlugin
-  private assetCode?: string
-  private assetScale?: number
-  private ilpAddress?: string
+  private readonly assetCode: string
+  private readonly assetScale: number
   private dataHandler: IDataHandler = defaultDataHandler
   private moneyHandler: IMoneyHandler = defaultMoneyHandler
 
@@ -36,25 +47,19 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
 
   private readonly log: ILogger
 
-  // TODO Change this to an options object with `balance`, `plugin` & `log`?
-  constructor(
-    plugin: IPlugin,
-    {
+  constructor({
+    plugin,
+    balance: {
       maximum = Infinity,
       settleTo = 0,
       settleThreshold,
       minimum = -Infinity
-    }: {
-      readonly maximum?: BigNumber.Value
-      readonly settleTo?: BigNumber.Value
-      readonly settleThreshold?: BigNumber.Value
-      readonly minimum?: BigNumber.Value
     },
-    log: ILogger
-  ) {
+    log,
+    assetScale,
+    assetCode
+  }: IBalanceWrapperOpts) {
     super()
-
-    this.log = log
 
     this.maximum = new BigNumber(maximum).dp(0, BigNumber.ROUND_FLOOR)
     this.settleTo = new BigNumber(settleTo).dp(0, BigNumber.ROUND_FLOOR)
@@ -111,17 +116,14 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
     this.plugin.on('connect', () => this.emit('connect'))
     this.plugin.on('disconnect', () => this.emit('disconnect'))
     this.plugin.on('error', (err: Error) => this.emit('error', err))
+
+    this.assetScale = assetScale
+    this.assetCode = assetCode
+
+    this.log = log
   }
 
   public async connect(opts: object) {
-    // TODO Will this work before connect is finished?
-    const { assetCode, assetScale, clientAddress } = await fetch(
-      (data: Buffer) => this.plugin.sendData(data)
-    )
-    this.assetCode = assetCode
-    this.assetScale = assetScale
-    this.ilpAddress = clientAddress
-
     await this.attemptSettle()
     return this.plugin.connect(opts)
   }
@@ -162,7 +164,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
           return IlpPacket.serializeIlpReject({
             code: 'F00',
             message: 'Insufficient funds',
-            triggeredBy: this.ilpAddress,
+            triggeredBy: '',
             data: Buffer.alloc(0)
           })
         }
@@ -226,7 +228,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
         return IlpPacket.serializeIlpReject({
           code: 'T04',
           message: 'Exceeded maximum balance',
-          triggeredBy: this.ilpAddress,
+          triggeredBy: '',
           data: Buffer.alloc(0)
         })
       }

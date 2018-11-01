@@ -1,7 +1,7 @@
 import axios from 'axios'
 import BigNumber from 'bignumber.js'
 import { randomBytes } from 'crypto'
-import { EventEmitter } from 'eventemitter3'
+import EventEmitter = require('eventemitter3')
 import * as IlpPacket from 'ilp-packet'
 import {
   MemoryStore,

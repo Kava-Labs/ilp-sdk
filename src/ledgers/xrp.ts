@@ -56,15 +56,17 @@ export class Xrp extends Ledger {
       xrpServer: this.xrpServer
     })
 
-    return new BalanceWrapper(
+    return new BalanceWrapper({
       plugin,
-      {
+      assetCode: 'XRP',
+      assetScale: 9,
+      balance: {
         maximum: maxCredit,
         settleThreshold: maxCredit,
         settleTo: maxCredit
       },
-      createLogger('ilp-plugin-xrp-asym-client:balance')
-    )
+      log: createLogger('ilp-plugin-xrp-asym-client:balance')
+    })
   }
 
   protected async destroyPlugin(plugin: IPlugin) {
