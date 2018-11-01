@@ -43,10 +43,10 @@ export class Eth extends Ledger {
   public async createPlugin(serverUri: string) {
     const gas = 115636 + 50443 + 40201
     const gasPrice = await this.getGasPrice()
-    const txFee = gasPrice.times(gas)
+    const txFee = convert(gasPrice.times(gas), IUnit.Wei, IUnit.Gwei)
 
     // 1.5x it to account for fee variance
-    const maxCredit = txFee.times(1.5)
+    const maxCredit = txFee.times(1.5).dp(0, BigNumber.ROUND_CEIL)
 
     return new EthereumPlugin(
       {
