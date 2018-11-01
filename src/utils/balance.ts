@@ -124,8 +124,8 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   }
 
   public async connect(opts: object) {
-    await this.attemptSettle()
-    return this.plugin.connect(opts)
+    await this.plugin.connect(opts)
+    return this.attemptSettle()
   }
 
   public disconnect() {
@@ -187,7 +187,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   }
 
   public registerDataHandler(handler: IDataHandler) {
-    if (this.dataHandler) {
+    if (this.dataHandler !== defaultDataHandler) {
       throw new Error('request handler is already registered')
     }
 
@@ -195,7 +195,7 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   }
 
   public registerMoneyHandler(handler: IMoneyHandler) {
-    if (this.moneyHandler) {
+    if (this.moneyHandler !== defaultMoneyHandler) {
       throw new Error('money handler is already registered')
     }
 

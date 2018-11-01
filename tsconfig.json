@@ -8,7 +8,7 @@
     "declaration": true,
     "sourceMap": true,
     "esModuleInterop": true,
-    
+
     // dont clear my console bro
     "preserveWatchOutput": true,
 

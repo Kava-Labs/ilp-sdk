@@ -121,11 +121,11 @@ export abstract class Ledger extends EventEmitter {
       })
     })
 
-    if (typeof this.setupPlugin === 'function') {
-      return this.setupPlugin()
-    }
-
     this.plugin = plugin
+
+    if (typeof this.setupPlugin === 'function') {
+      await this.setupPlugin()
+    }
   }
 
   /**
@@ -278,12 +278,24 @@ export abstract class Ledger extends EventEmitter {
     custom: Partial<IStreamPlugin>
   ): IStreamPlugin {
     return {
-      connect: plugin.connect,
-      disconnect: plugin.disconnect,
-      isConnected: plugin.isConnected,
-      sendData: plugin.sendData,
-      registerDataHandler: plugin.registerDataHandler,
-      deregisterDataHandler: plugin.deregisterDataHandler,
+      connect() {
+        return plugin.connect()
+      },
+      disconnect() {
+        return plugin.disconnect()
+      },
+      isConnected() {
+        return plugin.isConnected()
+      },
+      sendData(data: Buffer) {
+        return plugin.sendData(data)
+      },
+      registerDataHandler(handler: IDataHandler) {
+        return plugin.registerDataHandler(handler)
+      },
+      deregisterDataHandler() {
+        return plugin.deregisterDataHandler()
+      },
       ...custom
     }
   }
