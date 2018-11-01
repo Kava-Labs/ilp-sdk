@@ -36,7 +36,7 @@ export class Xrp extends Ledger {
   }
 
   private get xrpServer() {
-    return process.env.LEDGER_ENV === 'testnet'
+    return process.env.LEDGER_ENV === 'mainnet'
       ? 'wss://s1.ripple.com'
       : 'wss://s.altnet.rippletest.net:51233'
   }
