@@ -70,11 +70,12 @@ export class Eth extends Ledger {
 
   protected async setupPlugin(): Promise<void> {
     const gasPrice = await this.getGasPrice()
-    const openTxFee = gasPrice.times(115636)
+    const openTxFee = convert(gasPrice.times(115636), IUnit.Wei, IUnit.Gwei)
+    const amount = openTxFee.times(1.5).dp(0, BigNumber.ROUND_CEIL)
 
     // Trigger the connector to open a channel back to ourselves
     const { streamMoney } = await this.exchange({
-      amount: openTxFee.times(1.5),
+      amount,
       ledger: this
     })
 
