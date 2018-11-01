@@ -1,5 +1,5 @@
 import BigNumber from 'bignumber.js'
-import EventEmitter = require('eventemitter3')
+import EventEmitter from 'eventemitter3'
 import * as IlpPacket from 'ilp-packet'
 import { convert } from './convert'
 import { IDataHandler, ILogger, IMoneyHandler, IPlugin } from './types'

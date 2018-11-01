@@ -1,4 +1,4 @@
-import EventEmitter = require('eventemitter3')
+import EventEmitter from 'eventemitter3'
 import { Plugin } from 'ilp-protocol-stream/src/util/plugin-interface'
 
 export type IDataHandler = (data: Buffer) => Promise<Buffer>

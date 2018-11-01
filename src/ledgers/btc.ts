@@ -1,4 +1,4 @@
-import LightningPlugin = require('ilp-plugin-lightning')
+import LightningPlugin from 'ilp-plugin-lightning'
 import { Ledger } from '../ledger'
 import { convert, IUnit } from '../utils/convert'
 import { IPlugin } from '../utils/types'

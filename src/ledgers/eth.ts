@@ -1,6 +1,6 @@
 import BigNumber from 'bignumber.js'
 import EthereumPlugin from 'ilp-plugin-ethereum'
-import Web3 = require('web3')
+import Web3 from 'web3'
 import { Provider as IProvider } from 'web3/providers'
 import { Ledger } from '../ledger'
 import { convert, IUnit } from '../utils/convert'
