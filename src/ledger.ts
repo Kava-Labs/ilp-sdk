@@ -45,7 +45,7 @@ export abstract class Ledger extends EventEmitter {
   public abstract readonly assetCode: string
   public abstract readonly assetScale: number
   public abstract readonly remoteConnectors: {
-    readonly testnet: {
+    readonly test: {
       readonly [name: string]: string
     }
     readonly mainnet: {
