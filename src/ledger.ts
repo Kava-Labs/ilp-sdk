@@ -48,7 +48,7 @@ export abstract class Ledger extends EventEmitter {
     readonly test: {
       readonly [name: string]: string
     }
-    readonly mainnet: {
+    readonly live: {
       readonly [name: string]: string
     }
   }
