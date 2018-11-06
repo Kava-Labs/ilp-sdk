@@ -16,10 +16,10 @@ export class Eth extends Ledger {
   public readonly assetCode = 'ETH'
   public readonly assetScale = 9
   public readonly remoteConnectors = {
-    mainnet: {
+    live: {
       'Kava Labs': 'ilp.kava.io/eth'
     },
-    testnet: {
+    test: {
       'Kava Labs': 'test.ilp.kava.io/eth'
     }
   }

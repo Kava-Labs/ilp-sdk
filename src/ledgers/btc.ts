@@ -14,10 +14,10 @@ export class Btc extends Ledger {
   public readonly assetCode = 'BTC'
   public readonly assetScale = 8
   public readonly remoteConnectors = {
-    testnet: {
+    test: {
       'Kava Labs': 'test.ilp.kava.io/btc'
     },
-    mainnet: {
+    live: {
       'Kava Labs': 'ilp.kava.io/btc'
     }
   }
