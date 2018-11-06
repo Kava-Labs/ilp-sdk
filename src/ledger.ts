@@ -262,18 +262,15 @@ export abstract class Ledger extends EventEmitter {
     return {
       exchangeRate: new BigNumber(conn.minimumAcceptableExchangeRate),
       streamMoney: async () => {
-        await Promise.race([
-          stream.sendTotal(amount, {
-            timeout: 360000
-          }),
-          new Promise(resolve => stream.on('end', resolve))
-        ])
+        await stream.sendTotal(amount, {
+          timeout: 360000
+        })
 
         stream.removeAllListeners()
         conn.removeAllListeners()
 
         // Since the stream server is still alive, for exchanges, later settlements from connector will still be accepted
-        return conn.destroy()
+        return conn.end()
       }
     }
   }

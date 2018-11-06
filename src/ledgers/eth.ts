@@ -81,7 +81,18 @@ export class Eth extends Ledger {
 
     // TODO In the future, this should do the fx to check the exchange rate
 
-    return streamMoney()
+    await streamMoney()
+
+    // Wait for us to receive money so we know the paychans are bilateral
+    await Promise.race([
+      new Promise(resolve => {
+        this.once('moneyIn', () => {
+          resolve()
+        })
+      }),
+      // Wait up to 60 seconds for the channel to be opened
+      new Promise(r => setTimeout(r, 60000))
+    ])
   }
 
   protected async destroyPlugin(plugin: IPlugin) {
