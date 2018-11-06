@@ -35,7 +35,7 @@ export class Eth extends Ledger {
     this.ethereumPrivateKey = ethereumPrivateKey
     this.ethereumProvider = new Web3.providers.HttpProvider(
       `https://${
-        process.env.LEDGER_ENV === 'testnet' ? 'kovan' : 'mainnet'
+        process.env.LEDGER_ENV === 'test' ? 'kovan' : 'mainnet'
       }.infura.io/bXIbx0x6ofEuDANTSeKI`
     )
   }

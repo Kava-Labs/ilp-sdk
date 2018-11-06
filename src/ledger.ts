@@ -14,7 +14,7 @@ import { promisify } from 'util'
 import { IDataHandler, IPlugin } from './utils/types'
 
 // TODO Remove this
-process.env.LEDGER_ENV = 'testnet'
+process.env.LEDGER_ENV = 'test'
 
 // Intentionally don't send any identifying info here, per:
 // https://github.com/interledgerjs/ilp-protocol-stream/commit/75b9dcd544cec1aa4d1cc357f300429af86736e4
@@ -72,12 +72,16 @@ export abstract class Ledger extends EventEmitter {
     const plugin = await this.createPlugin(serverUri)
     await plugin.connect()
 
-    // TODO Should the Stream server expose the sourceAddress directly?
+    // TODO Should this grab the sourceAddress from the Stream server (duplicate IL-DCP requests)?
     // - Should this set the assetScale / assetCode on this ledger?
     // - What if it's different from the configured assetScale / assetCode? Fail?
     const { clientAddress } = await fetch((data: Buffer) =>
       plugin.sendData(data)
     )
+
+    plugin.registerMoneyHandler(async amount => {
+      this.emit('moneyIn', new BigNumber(amount))
+    })
 
     plugin.registerDataHandler(async (data: Buffer) => {
       let prepare: IlpPacket.IlpPrepare
@@ -88,10 +92,11 @@ export abstract class Ledger extends EventEmitter {
         return this.streamServerHandler(data)
       }
 
-      const localAddressParts = prepare.destination
-        .replace(clientAddress + '.', '')
+      const hasConnectionTag = prepare.destination
+        .replace(clientAddress, '')
         .split('.')
-      if (localAddressParts.length === 0 || !localAddressParts[0]) {
+        .some(a => !!a)
+      if (hasConnectionTag) {
         // Connection ID exists in the ILP address, so route to Stream server
         return this.streamServerHandler(data)
       } else {
