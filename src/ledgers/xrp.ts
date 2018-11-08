@@ -4,8 +4,8 @@ import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
 import { Ledger } from '../ledger'
-import { BalanceWrapper } from '../utils/balance'
 import { convert, IUnit } from '../utils/convert'
+import { PluginWrapper } from '../utils/middlewares'
 import { IPlugin } from '../utils/types'
 
 interface IXrpOpts {
@@ -46,24 +46,21 @@ export class Xrp extends Ledger {
   }
 
   protected async createPlugin(serverUri: string) {
-    const maxCredit = this.maxInFlight.times(4)
-
     const plugin: IPlugin = new XrpAsymClient({
       currencyScale: 9,
-      maxPacketAmount: this.maxInFlight.toString(),
       secret: this.xrpSecret,
       server: serverUri,
       xrpServer: this.xrpServer
     })
 
-    return new BalanceWrapper({
+    return new PluginWrapper({
       plugin,
       assetCode: 'XRP',
       assetScale: 9,
       balance: {
-        maximum: maxCredit,
-        settleThreshold: maxCredit,
-        settleTo: maxCredit
+        maximum: this.maxInFlight.times(4),
+        settleThreshold: this.maxInFlight.times(2),
+        settleTo: this.maxInFlight.times(2)
       },
       log: createLogger('ilp-plugin-xrp-asym-client:balance')
     })
