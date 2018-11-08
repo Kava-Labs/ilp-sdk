@@ -69,6 +69,9 @@ export class Eth extends Ledger {
   }
 
   protected async setupPlugin(): Promise<void> {
+    // Wait for 1s to ensure server credits the claim from `connect`
+    await new Promise(r => setTimeout(r, 500))
+
     const gasPrice = await this.getGasPrice()
     const openTxFee = convert(gasPrice.times(115636), IUnit.Wei, IUnit.Gwei)
     const amount = openTxFee.times(1.5).dp(0, BigNumber.ROUND_CEIL)
