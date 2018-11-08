@@ -1,8 +1,18 @@
 import BigNumber from 'bignumber.js'
 import EventEmitter from 'eventemitter3'
-import * as IlpPacket from 'ilp-packet'
+import {
+  deserializeIlpPacket,
+  deserializeIlpPrepare,
+  IlpReject,
+  serializeIlpReject,
+  Type
+} from 'ilp-packet'
 import { convert } from './convert'
 import { IDataHandler, ILogger, IMoneyHandler, IPlugin } from './types'
+
+const TypePrepare = Type.TYPE_ILP_PREPARE
+const TypeFulfill = Type.TYPE_ILP_FULFILL
+const TypeReject = Type.TYPE_ILP_REJECT
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
@@ -15,37 +25,43 @@ const defaultMoneyHandler = () => {
   throw new Error('no money handler registered')
 }
 
-export interface IBalanceWrapperOpts {
+export interface IWrapperOpts {
   balance: {
     maximum?: BigNumber.Value
     settleTo?: BigNumber.Value
     settleThreshold?: BigNumber.Value
     minimum?: BigNumber.Value
   }
+  maxPacketAmount?: BigNumber.Value
   plugin: IPlugin
   assetCode: string
   assetScale: number
   log: ILogger
 }
 
-export class BalanceWrapper extends EventEmitter implements IPlugin {
+export class PluginWrapper extends EventEmitter implements IPlugin {
   public static readonly version = 2
 
+  // Internal plugin
   private readonly plugin: IPlugin
-  private readonly assetCode: string
-  private readonly assetScale: number
   private dataHandler: IDataHandler = defaultDataHandler
   private moneyHandler: IMoneyHandler = defaultMoneyHandler
 
+  // Balance
   private readonly maximum: BigNumber
   private readonly settleTo: BigNumber
   private readonly settleThreshold?: BigNumber
   private readonly minimum: BigNumber
-
   private balance = new BigNumber(0)
   private payoutAmount: BigNumber
 
+  // Max packet amount
+  private readonly maxPacketAmount: BigNumber
+
+  // Logging
   private readonly log: ILogger
+  private readonly assetCode: string
+  private readonly assetScale: number
 
   constructor({
     plugin,
@@ -55,10 +71,11 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
       settleThreshold,
       minimum = -Infinity
     },
+    maxPacketAmount = Infinity,
     log,
     assetScale,
     assetCode
-  }: IBalanceWrapperOpts) {
+  }: IWrapperOpts) {
     super()
 
     this.maximum = new BigNumber(maximum).dp(0, BigNumber.ROUND_FLOOR)
@@ -106,6 +123,10 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
       )
     }
 
+    this.maxPacketAmount = new BigNumber(maxPacketAmount)
+      .abs()
+      .dp(0, BigNumber.ROUND_FLOOR)
+
     this.plugin = plugin
 
     this.plugin.registerDataHandler((data: Buffer) => this.handleData(data))
@@ -139,29 +160,42 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   public async sendData(data: Buffer) {
     const next = () => this.plugin.sendData(data)
 
-    if (data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
-      const { amount } = IlpPacket.deserializeIlpPrepare(data)
+    if (data[0] === TypePrepare) {
+      const { amount } = deserializeIlpPrepare(data)
 
       if (amount === '0') {
         return next()
       }
 
+      if (new BigNumber(amount).gt(this.maxPacketAmount)) {
+        return serializeIlpReject({
+          code: 'F08',
+          triggeredBy: '',
+          message: 'Packet size is too large.',
+          data: Buffer.from(
+            JSON.stringify({
+              receivedAmount: amount,
+              maximumAmount: this.maxPacketAmount.toString()
+            })
+          )
+        })
+      }
+
       const res = await next()
 
-      const packet = IlpPacket.deserializeIlpPacket(res)
-      const isFulfill = res[0] === IlpPacket.Type.TYPE_ILP_FULFILL
-      const isReject = res[0] === IlpPacket.Type.TYPE_ILP_REJECT
+      const packet = deserializeIlpPacket(res)
+      const isFulfill = res[0] === TypeFulfill
+      const isReject = res[0] === TypeReject
 
       // Attempt to settle on fulfills and* T04s (to resolve stalemates)
       const attemptSettle =
-        isFulfill ||
-        (isReject && (packet.data as IlpPacket.IlpReject).code === 'T04')
+        isFulfill || (isReject && (packet.data as IlpReject).code === 'T04')
       if (attemptSettle) {
         try {
           this.subBalance(amount)
         } catch (err) {
           this.log.trace(err.message)
-          return IlpPacket.serializeIlpReject({
+          return serializeIlpReject({
             code: 'F00',
             message: 'Insufficient funds',
             triggeredBy: '',
@@ -213,19 +247,33 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
   private async handleData(data: Buffer) {
     const next = () => this.dataHandler(data)
 
-    if (data[0] === IlpPacket.Type.TYPE_ILP_PREPARE) {
-      const { amount } = IlpPacket.deserializeIlpPrepare(data)
+    if (data[0] === TypePrepare) {
+      const { amount } = deserializeIlpPrepare(data)
 
       // Ignore 0 amount packets
       if (amount === '0') {
         return next()
       }
 
+      if (new BigNumber(amount).gt(this.maxPacketAmount)) {
+        return serializeIlpReject({
+          code: 'F08',
+          triggeredBy: '',
+          message: 'Packet size is too large.',
+          data: Buffer.from(
+            JSON.stringify({
+              receivedAmount: amount,
+              maximumAmount: this.maxPacketAmount.toString()
+            })
+          )
+        })
+      }
+
       try {
         this.addBalance(amount)
       } catch (err) {
         this.log.trace(err.message)
-        return IlpPacket.serializeIlpReject({
+        return serializeIlpReject({
           code: 'T04',
           message: 'Exceeded maximum balance',
           triggeredBy: '',
@@ -235,10 +283,10 @@ export class BalanceWrapper extends EventEmitter implements IPlugin {
 
       const res = await next()
 
-      if (res[0] === IlpPacket.Type.TYPE_ILP_REJECT) {
+      if (res[0] === TypeReject) {
         // Allow this to throw if balance drops below minimum
         this.subBalance(amount)
-      } else if (res[0] === IlpPacket.Type.TYPE_ILP_FULFILL) {
+      } else if (res[0] === TypeFulfill) {
         this.attemptSettle()
       }
     }
