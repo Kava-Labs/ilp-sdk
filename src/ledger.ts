@@ -260,7 +260,7 @@ export abstract class Ledger extends EventEmitter {
     const stream = conn.createStream()
 
     return {
-      exchangeRate: new BigNumber(conn.minimumAcceptableExchangeRate),
+      exchangeRate: new BigNumber(1).div(conn.minimumAcceptableExchangeRate),
       streamMoney: async () => {
         await stream.sendTotal(amount, {
           timeout: 360000
