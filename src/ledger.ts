@@ -30,6 +30,15 @@ const defaultDataHandler = async () =>
 // https://nodejs.org/en/docs/guides/dont-block-the-event-loop/#blocking-the-event-loop-node-core-modules
 const generateSecret = async () => promisify(randomBytes)(32)
 
+const base64url = (buf: Buffer) =>
+  buf
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+
+const generateToken = async () => base64url(await generateSecret())
+
 export interface IInvoice {
   readonly destinationAccount: string
   readonly sharedSecret: Buffer
@@ -41,16 +50,16 @@ export interface IContinueStream {
   readonly streamMoney: () => Promise<void>
 }
 
+interface IConnectorList {
+  readonly [name: string]: (token: string) => string
+}
+
 export abstract class Ledger extends EventEmitter {
   public abstract readonly assetCode: string
   public abstract readonly assetScale: number
   public abstract readonly remoteConnectors: {
-    readonly test: {
-      readonly [name: string]: string
-    }
-    readonly live: {
-      readonly [name: string]: string
-    }
+    readonly test: IConnectorList
+    readonly live: IConnectorList
   }
 
   protected abstract readonly maxInFlight: BigNumber
@@ -62,12 +71,19 @@ export abstract class Ledger extends EventEmitter {
   protected streamClientHandler: IDataHandler = defaultDataHandler
   protected streamServerHandler: IDataHandler = defaultDataHandler
 
+  // TODO Add decorator here to generate token/use default server uri?
+
   /**
-   * Connect a plugin, prefund it, and create it to receive payments
-   * @param serverUri Uri and secret of the server to connect over BTP
+   * Connect a plugin, prefund it, and enable incoming payments
+   * @param serverUri Full uri (scheme, secret, host, port) of the server to connect over BTP
    */
-  public async connect(serverUri: string): Promise<void> {
+  public async connect(serverUri?: string): Promise<void> {
     const streamSecret = await generateSecret()
+
+    const defaultConnector = this.remoteConnectors[process.env.LEDGER_ENV][
+      'Kava Labs'
+    ]
+    serverUri = serverUri || defaultConnector(await generateToken())
 
     const plugin = await this.createPlugin(serverUri)
     await plugin.connect()
@@ -150,21 +166,18 @@ export abstract class Ledger extends EventEmitter {
 
   /**
    * Exchange assets directly between this ledger and the given receiving ledger
-   * @param ledger Instance of the receiving ledger
+   * @param destination Instance of the receiving ledger
    * @param amount Amount to send in base units of sending ledger
    */
   public async exchange({
-    ledger,
+    destination,
     amount
   }: {
-    readonly ledger: Ledger
+    readonly destination: Ledger
     readonly amount: BigNumber
   }): Promise<IContinueStream> {
     try {
-      const invoice = ledger.createInvoice(amount)
-
-      // TODO Do fx/use backend to see if the exchnage rate is reasonable, then continue
-
+      const invoice = destination.createInvoice(amount)
       return this.startStream(invoice)
     } catch (err) {
       throw new Error('TODO')

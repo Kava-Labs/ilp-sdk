@@ -17,10 +17,10 @@ export class Xrp extends Ledger {
   public readonly assetScale = 9
   public readonly remoteConnectors = {
     test: {
-      'Kava Labs': 'test.ilp.kava.io/xrp'
+      'Kava Labs': token => `btp+wss://:${token}@test.ilp.kava.io/xrp`
     },
     live: {
-      'Kava Labs': 'ilp.kava.io/xrp'
+      'Kava Labs': token => `btp+wss://:${token}@ilp.kava.io/xrp`
     }
   }
 

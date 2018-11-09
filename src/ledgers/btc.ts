@@ -15,12 +15,13 @@ export class Btc extends Ledger {
   public readonly assetScale = 8
   public readonly remoteConnectors = {
     test: {
-      'Kava Labs': 'test.ilp.kava.io/btc'
+      'Kava Labs': token => `btp+wss://:${token}@test.ilp.kava.io/btc`
     },
     live: {
-      'Kava Labs': 'ilp.kava.io/btc'
+      'Kava Labs': token => `btp+wss://:${token}@ilp.kava.io/btc`
     }
   }
+
   public readonly maxInFlight = convert(0.00001, IUnit.Btc, IUnit.Satoshi)
 
   private readonly lndPubKey: string

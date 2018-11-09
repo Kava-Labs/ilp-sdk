@@ -16,11 +16,11 @@ export class Eth extends Ledger {
   public readonly assetCode = 'ETH'
   public readonly assetScale = 9
   public readonly remoteConnectors = {
-    live: {
-      'Kava Labs': 'ilp.kava.io/eth'
-    },
     test: {
-      'Kava Labs': 'test.ilp.kava.io/eth'
+      'Kava Labs': token => `btp+wss://:${token}@test.ilp.kava.io/eth`
+    },
+    live: {
+      'Kava Labs': token => `btp+wss://:${token}@ilp.kava.io/eth`
     }
   }
 
@@ -79,7 +79,7 @@ export class Eth extends Ledger {
     // Trigger the connector to open a channel back to ourselves
     const { streamMoney } = await this.exchange({
       amount,
-      ledger: this
+      destination: this
     })
 
     // TODO In the future, this should do the fx to check the exchange rate
