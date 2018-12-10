@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
-    "target": "es2017",
-    "baseUrl": ".",
+    "target": "esnext",
+    "baseUrl": "src",
     "rootDir": "src",
     "outDir": "build",
     "moduleResolution": "node",
@@ -20,11 +20,11 @@
     "traceResolution": false /* Report module resolution log messages. */,
     "listEmittedFiles": false /* Print names of generated files part of the compilation. */,
     "listFiles": false /* Print names of files part of the compilation. */,
-    "pretty": true /* Stylize errors and messages using color and context. */,
-    "paths": {
-      "@src/*": ["src/*"],
-      "@ledgers/*": ["src/ledgers/*"],
-      "@test/*": ["src/__tests__/*"]
-    }
+    "pretty": true /* Stylize errors and messages using color and context. */
+    // "paths": {
+    //   "@/*": ["./*"],
+    //   "@ledgers/*": ["./ledgers/*"],
+    //   "@test/*": ["./__tests__/*"]
+    // }
   }
 }

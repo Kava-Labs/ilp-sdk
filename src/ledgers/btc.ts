@@ -1,36 +1,45 @@
+import { btc, satoshi } from '@kava-labs/crypto-rate-utils'
+import BigNumber from 'bignumber.js'
+import createLogger from 'ilp-logger'
 import LightningPlugin from 'ilp-plugin-lightning'
-import { Ledger } from '../ledger'
-import { convert, IUnit } from '../utils/convert'
+import { ILedgerOpts, Ledger } from '../ledger'
+import { PluginWrapper } from '../utils/middlewares'
 import { IPlugin } from '../utils/types'
 
-export interface IBtcOpts {
+export interface IBtcOpts extends ILedgerOpts {
   readonly lndPubKey: string
   readonly lndHost: string
   readonly tlsCert: string
   readonly macaroon: string
 }
 
+// TODO Use this!
+// // Limit the precision based on the scale of the base unit
+// .decimalPlaces(dest.unit - dest.pluginBase, BigNumber.ROUND_DOWN)
+
 export class Btc extends Ledger {
-  public readonly assetCode = 'BTC'
-  public readonly assetScale = 8
+  public static readonly assetCode = 'BTC'
+  public readonly baseUnit = satoshi
+  public readonly exchangeUnit = btc
   public readonly remoteConnectors = {
-    test: {
-      'Kava Labs': token => `btp+wss://:${token}@test.ilp.kava.io/btc`
+    local: {
+      'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7441`
     },
-    live: {
-      'Kava Labs': token => `btp+wss://:${token}@ilp.kava.io/btc`
+    testnet: {
+      'Kava Labs': (token: string) => `btp+wss://:${token}@test.ilp.kava.io/btc`
+    },
+    mainnet: {
+      'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/btc`
     }
   }
-
-  public readonly maxInFlight = convert(0.00001, IUnit.Btc, IUnit.Satoshi)
 
   private readonly lndPubKey: string
   private readonly lndHost: string
   private readonly tlsCert: string
   private readonly macaroon: string
 
-  constructor({ lndPubKey, lndHost, tlsCert, macaroon }: IBtcOpts) {
-    super()
+  constructor({ lndPubKey, lndHost, tlsCert, macaroon, ...opts }: IBtcOpts) {
+    super(opts)
 
     this.lndPubKey = lndPubKey
     this.lndHost = lndHost
@@ -38,10 +47,19 @@ export class Btc extends Ledger {
     this.macaroon = macaroon
   }
 
-  protected createPlugin(serverUri: string) {
-    return new LightningPlugin({
+  protected async createPlugin(serverUri: string) {
+    /**
+     * TODO ?
+     */
+    const maxInFlight = await this.maxInFlight
+    const maxPrefund = maxInFlight.times(1.1).dp(0, BigNumber.ROUND_CEIL)
+    const maxCredit = maxPrefund
+      .plus(maxInFlight.times(2))
+      .dp(0, BigNumber.ROUND_CEIL)
+
+    const plugin = new LightningPlugin({
       role: 'client',
-      maxPacketAmount: this.maxInFlight,
+      maxPacketAmount: maxInFlight,
       lndIdentityPubkey: this.lndPubKey,
       lndHost: this.lndHost,
       lnd: {
@@ -52,11 +70,21 @@ export class Btc extends Ledger {
       // @ts-ignore
       server: serverUri,
       balance: {
-        // If we're a sender, only settle up to a certain amount
-        maximum: this.maxInFlight.times(4),
-        settleTo: this.maxInFlight.times(2),
-        settleThreshold: this.maxInFlight.times(2)
+        maximum: maxCredit,
+        settleTo: maxPrefund,
+        settleThreshold: maxPrefund
       }
+    })
+
+    return new PluginWrapper({
+      plugin,
+      ildcpInfo: {
+        clientAddress: '',
+        assetCode: 'BTC',
+        assetScale: 8
+      },
+      log: createLogger('ilp-plugin-lightning:max-packet'),
+      maxPacketAmount: maxInFlight.toString()
     })
   }
 

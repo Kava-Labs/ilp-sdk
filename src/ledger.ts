@@ -1,219 +1,223 @@
+import { AssetUnit, convert, RateApi, usd } from '@kava-labs/crypto-rate-utils'
 import axios from 'axios'
 import BigNumber from 'bignumber.js'
-import { randomBytes } from 'crypto'
 import EventEmitter from 'eventemitter3'
-import * as IlpPacket from 'ilp-packet'
+import {
+  deserializeIlpPrepare,
+  deserializeIlpReply,
+  IlpPrepare,
+  IlpReply,
+  serializeIlpPrepare,
+  serializeIlpReply
+} from 'ilp-packet'
 import {
   MemoryStore,
   Store as IStore
-} from 'ilp-plugin-ethereum/build/utils/store'
+} from 'ilp-plugin-ethereum/build/utils/store' // TODO Can I eliminate this? Antipattern
 import { fetch } from 'ilp-protocol-ildcp'
 import * as IlpStream from 'ilp-protocol-stream'
 import { Plugin as IStreamPlugin } from 'ilp-protocol-stream/src/util/plugin-interface'
-import { promisify } from 'util'
-import { IDataHandler, IPlugin } from './utils/types'
+import { generateSecret, generateToken } from './utils/crypto'
+import { defaultDataHandler } from './utils/packet'
+import { DataHandler3, IDataHandler, IPlugin, IPlugin3 } from './utils/types'
 
-// TODO Remove this
-process.env.LEDGER_ENV = 'test'
+// TODO Ledgers should probably expose a method to format a unit/BigNum
+// as some of its native currency
 
-// Intentionally don't send any identifying info here, per:
-// https://github.com/interledgerjs/ilp-protocol-stream/commit/75b9dcd544cec1aa4d1cc357f300429af86736e4
-const defaultDataHandler = async () =>
-  IlpPacket.serializeIlpReject({
-    code: 'F02', // Unreachable
-    data: Buffer.alloc(0),
-    message: '',
-    triggeredBy: ''
-  })
+// TODO LEDGER_ENV is inconsistent with envkeys!
+// TODO Remove this? Should this be a config option? Where else is it used?
+process.env.LEDGER_ENV = 'local'
 
-// Use the async version to prevent blocking the event loop:
-// https://nodejs.org/en/docs/guides/dont-block-the-event-loop/#blocking-the-event-loop-node-core-modules
-const generateSecret = async () => promisify(randomBytes)(32)
-
-const base64url = (buf: Buffer) =>
-  buf
-    .toString('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-
-const generateToken = async () => base64url(await generateSecret())
+export interface ILedgerOpts {
+  readonly rateBackend: RateApi
+}
 
 export interface IInvoice {
   readonly destinationAccount: string
   readonly sharedSecret: Buffer
-  readonly amount: BigNumber
 }
 
 export interface IContinueStream {
   readonly exchangeRate: BigNumber
-  readonly streamMoney: () => Promise<void>
+  readonly streamMoney: (amount: BigNumber) => Promise<void>
 }
 
 interface IConnectorList {
   readonly [name: string]: (token: string) => string
 }
 
+interface IldcpInfo {
+  clientAddress: string
+  assetScale: number
+  assetCode: string
+}
+
 export abstract class Ledger extends EventEmitter {
-  public abstract readonly assetCode: string
-  public abstract readonly assetScale: number
+  /** Unit used as the base of the plugin, for conversions */
+  public abstract readonly baseUnit: (amount?: BigNumber.Value) => AssetUnit
+  /** Unit of exchange, for conversions */
+  public abstract readonly exchangeUnit: (amount?: BigNumber.Value) => AssetUnit
   public abstract readonly remoteConnectors: {
-    readonly test: IConnectorList
-    readonly live: IConnectorList
+    readonly local: IConnectorList
+    readonly testnet: IConnectorList
+    readonly mainnet: IConnectorList
   }
 
-  protected abstract readonly maxInFlight: BigNumber
-
-  protected plugin?: IPlugin
+  protected plugin?: IPlugin3
   protected readonly store: IStore = new MemoryStore()
 
   protected streamServer?: IlpStream.Server
-  protected streamClientHandler: IDataHandler = defaultDataHandler
+  protected streamClientHandler: DataHandler3
   protected streamServerHandler: IDataHandler = defaultDataHandler
 
-  // TODO Add decorator here to generate token/use default server uri?
+  protected readonly rateBackend: RateApi
+
+  protected ildcpInfo: IldcpInfo
+
+  constructor({ rateBackend }: ILedgerOpts) {
+    super()
+
+    this.rateBackend = rateBackend
+  }
+
+  public get maxInFlight(): BigNumber {
+    return convert(usd(0.1), this.baseUnit(), this.rateBackend)
+  }
+
+  public get clientAddress(): string {
+    return this.ildcpInfo.clientAddress
+  }
+
+  public get assetCode(): string {
+    return this.ildcpInfo.assetCode
+  }
+
+  public get assetScale(): number {
+    return this.ildcpInfo.assetScale
+  }
+
+  /** Send packets through this plugin */
+  public sendData(data: IlpPrepare): Promise<IlpReply> {
+    return this.plugin.sendData(data)
+  }
+
+  /**
+   * Handle incoming packets without a connection tag
+   * (e.g. for exchanges, and not receiving via Stream server)
+   */
+  public registerDataHandler(handler: DataHandler3): void {
+    this.streamClientHandler = handler
+  }
 
   /**
    * Connect a plugin, prefund it, and enable incoming payments
    * @param serverUri Full uri (scheme, secret, host, port) of the server to connect over BTP
    */
   public async connect(serverUri?: string): Promise<void> {
-    const streamSecret = await generateSecret()
-
-    const defaultConnector = this.remoteConnectors[process.env.LEDGER_ENV][
-      'Kava Labs'
-    ]
-    serverUri = serverUri || defaultConnector(await generateToken())
+    const createBtpUri = this.remoteConnectors[
+      process.env.LEDGER_ENV as 'local' | 'test' | 'live' // TODO this is actually wrong lol
+    ]['Kava Labs']
+    serverUri = serverUri || createBtpUri(await generateToken())
 
     const plugin = await this.createPlugin(serverUri)
     await plugin.connect()
 
-    // TODO Should this grab the sourceAddress from the Stream server (duplicate IL-DCP requests)?
-    // - Should this set the assetScale / assetCode on this ledger?
-    // - What if it's different from the configured assetScale / assetCode? Fail?
-    const { clientAddress } = await fetch((data: Buffer) =>
-      plugin.sendData(data)
+    /**
+     * TODO
+     * 1. Submit PR to Stream to expose sourceAccount on server
+     * 2. Move data & money handler registration to after stream server
+     * 3. Use serverAccount on server as the clientAddress for routing
+     * 4. Check to make sure assetScale / assetCode is the same as the configured ledger
+     */
+
+    this.ildcpInfo = await fetch(async (data: Buffer) =>
+      serializeIlpReply(await plugin.sendData(deserializeIlpPrepare(data)))
     )
 
     plugin.registerMoneyHandler(async amount => {
-      this.emit('moneyIn', new BigNumber(amount))
+      this.emit('moneyIn', amount)
     })
 
-    plugin.registerDataHandler(async (data: Buffer) => {
-      let prepare: IlpPacket.IlpPrepare
-      try {
-        prepare = IlpPacket.deserializeIlpPrepare(data)
-      } catch (err) {
-        // If packet is malformed/not a prepare, route to Stream server for error handling
-        return this.streamServerHandler(data)
-      }
-
+    plugin.registerDataHandler(async (prepare: IlpPrepare) => {
       const hasConnectionTag = prepare.destination
-        .replace(clientAddress, '')
+        .replace(this.ildcpInfo.clientAddress, '')
         .split('.')
         .some(a => !!a)
       if (hasConnectionTag) {
         // Connection ID exists in the ILP address, so route to Stream server
-        return this.streamServerHandler(data)
+        // TODO !
+        return deserializeIlpReply(
+          await this.streamServerHandler(serializeIlpPrepare(prepare))
+        )
       } else {
         // ILP address is for the root plugin, so route to Stream sending connection
-        return this.streamClientHandler(data)
+        return this.streamClientHandler(prepare)
       }
     })
 
     // Setup a STREAM server for receiving
-    this.streamServer = await IlpStream.createServer({
-      idleTimeout: 360000, // Destroy connection after 6 minutes of inactivity
-      plugin: this.wrapStreamPlugin(plugin, {
-        deregisterDataHandler: () => {
-          this.streamServerHandler = defaultDataHandler
-        },
-        registerDataHandler: handler => {
-          this.streamServerHandler = handler
-        }
-      }),
-      receiveOnly: true,
-      serverSecret: streamSecret
-    })
+    // TODO This should be persisted, so we can still accept payments without exchanging new secrets
+    // const streamSecret = await generateSecret()
+    // this.streamServer = await IlpStream.createServer({
+    //   idleTimeout: 360000, // Destroy connection after 6 minutes of inactivity
+    //   plugin: this.wrapStreamPlugin(this.plugin, {
+    //     registerDataHandler: handler => {
+    //       this.streamServerHandler = handler
+    //     },
+    //     deregisterDataHandler: () => {
+    //       this.streamServerHandler = defaultDataHandler
+    //     }
+    //   }),
+    //   receiveOnly: true,
+    //   serverSecret: streamSecret
+    // })
 
-    this.streamServer.on('connection', (conn: IlpStream.Connection) => {
-      conn.on('stream', (stream: IlpStream.DataAndMoneyStream) => {
-        stream.setReceiveMax(Infinity)
-      })
-    })
+    // this.streamServer.on('connection', (conn: IlpStream.Connection) => {
+    //   conn.on('stream', (stream: IlpStream.DataAndMoneyStream) => {
+    //     stream.setReceiveMax(Infinity)
+    //   })
+    // })
 
     this.plugin = plugin
 
-    if (typeof this.setupPlugin === 'function') {
-      await this.setupPlugin()
-    }
-  }
-
-  /**
-   * Generate credentials to accept incoming payments from a new connection
-   * @param amount Amount to send to the Stream server
-   */
-  public createInvoice(amount: BigNumber): IInvoice {
-    if (!this.streamServer) {
-      throw new Error('Stream server is not connected')
-    }
-
-    return {
-      amount,
-      ...this.streamServer.generateAddressAndSecret()
-    }
+    await this.setupPlugin()
   }
 
   /**
    * Exchange assets directly between this ledger and the given receiving ledger
    * @param destination Instance of the receiving ledger
-   * @param amount Amount to send in base units of sending ledger
    */
-  public async exchange({
-    destination,
-    amount
-  }: {
-    readonly destination: Ledger
-    readonly amount: BigNumber
-  }): Promise<IContinueStream> {
-    try {
-      const invoice = destination.createInvoice(amount)
-      return this.startStream(invoice)
-    } catch (err) {
-      throw new Error('TODO')
-    }
-  }
+  // public async exchange({ streamServer }: Ledger): Promise<IContinueStream> {
+  //   if (!streamServer) {
+  //     throw new Error('Stream server is not connected')
+  //   }
+
+  //   // TODO Generate my own random connection tag?
+
+  //   const invoice = streamServer.generateAddressAndSecret()
+  //   return this.startStream(invoice)
+  // }
 
   /**
    * Send payments to given SPSP receiver
    * @param receiver Payment pointer or URL for SPSP endpoint
    */
-  public async pay(
-    receiver: string,
-    amount: BigNumber
-  ): Promise<IContinueStream> {
-    const endpoint = new URL(
-      receiver.startsWith('$') ? 'https://' + receiver.substring(1) : receiver
-    )
+  // public async pay(receiver: string): Promise<IContinueStream> {
+  //   const endpoint = new URL(
+  //     receiver.startsWith('$') ? 'https://' + receiver.substring(1) : receiver
+  //   )
 
-    try {
-      const { data } = await axios(endpoint.href, {
-        headers: {
-          accept: 'application/spsp4+json, application/spsp+json'
-        }
-      })
+  //   const { data } = await axios(endpoint.href, {
+  //     headers: {
+  //       accept: 'application/spsp4+json, application/spsp+json'
+  //     }
+  //   })
 
-      const invoice: IInvoice = {
-        destinationAccount: data.destination_account,
-        sharedSecret: Buffer.from(data.shared_secret, 'base64'),
-        amount
-      }
-
-      return this.startStream(invoice)
-    } catch (err) {
-      throw new Error('TODO')
-    }
-  }
+  //   return this.startStream({
+  //     destinationAccount: data.destination_account,
+  //     sharedSecret: Buffer.from(data.shared_secret, 'base64')
+  //   })
+  // }
 
   public async disconnect() {
     if (this.streamServer) {
@@ -229,64 +233,67 @@ export abstract class Ledger extends EventEmitter {
     }
   }
 
-  protected abstract createPlugin(serverUri: string): Promise<IPlugin>
+  protected abstract createPlugin(serverUri: string): Promise<IPlugin3>
 
-  // TODO Should this exist, or not?
   protected setupPlugin(): Promise<void> {
     return Promise.resolve()
   }
 
   protected abstract destroyPlugin(plugin: IPlugin): Promise<void>
 
-  protected async startStream({
-    destinationAccount,
-    sharedSecret,
-    amount
-  }: IInvoice): Promise<IContinueStream> {
-    if (!this.plugin) {
-      throw new Error('TODO')
-    }
+  // TODO Since I'm not streaming with stream anymore... can I eliminate this?
+  // protected async startStream({
+  //   destinationAccount,
+  //   sharedSecret
+  // }: IInvoice): Promise<IContinueStream> {
+  //   if (!this.plugin) {
+  //     throw new Error('Ledger must be connected before streaming money')
+  //   }
 
-    const plugin = this.wrapStreamPlugin(this.plugin, {
-      // Register handlers so we can do our own routing
-      registerDataHandler: handler => {
-        this.streamClientHandler = handler
-      },
-      deregisterDataHandler: () => {
-        this.streamClientHandler = defaultDataHandler
-      },
-      // Overwrite disconnect so the plugin stays connected after this connection is closed
-      disconnect() {
-        return Promise.resolve()
-      }
-    })
+  //   const plugin = this.wrapStreamPlugin(this.plugin, {
+  //     // Register handlers so we can do our own routing
+  //     registerDataHandler: handler => {
+  //       this.streamClientHandler = handler
+  //     },
+  //     deregisterDataHandler: () => {
+  //       this.streamClientHandler = defaultDataHandler
+  //     },
+  //     // Overwrite disconnect so the plugin stays connected after this connection is closed
+  //     disconnect() {
+  //       return Promise.resolve()
+  //     }
+  //   })
 
-    // Setup the sender (Stream client)
-    const conn = await IlpStream.createConnection({
-      plugin,
-      destinationAccount,
-      sharedSecret,
-      slippage: 0.02, // Max of 2% fluxuation in exchange rate
-      idleTimeout: 360000 // Destroy connection after 6 minutes of inactivity
-    })
+  //   // Setup the sender (Stream client)
+  //   const conn = await IlpStream.createConnection({
+  //     plugin,
+  //     destinationAccount,
+  //     sharedSecret,
+  //     slippage: 0.02, // Max of 2% fluxuation in exchange rate
+  //     idleTimeout: 360000 // Destroy connection after 6 minutes of inactivity
+  //   })
 
-    const stream = conn.createStream()
+  //   const stream = conn.createStream()
 
-    return {
-      exchangeRate: new BigNumber(1).div(conn.minimumAcceptableExchangeRate),
-      streamMoney: async () => {
-        await stream.sendTotal(amount, {
-          timeout: 360000
-        })
+  //   return {
+  //     exchangeRate: new BigNumber(conn.minimumAcceptableExchangeRate),
+  //     streamMoney: async (amount: BigNumber) => {
+  //       await stream.sendTotal(amount, {
+  //         timeout: 360000
+  //       })
 
-        stream.removeAllListeners()
-        conn.removeAllListeners()
+  //       // TODO hook into destination ledger
+  //       // Wait 500ms for packets to finish processing
+  //       await new Promise(r => setTimeout(r, 500))
 
-        // Since the stream server is still alive, for exchanges, later settlements from connector will still be accepted
-        return conn.end()
-      }
-    }
-  }
+  //       stream.removeAllListeners()
+  //       conn.removeAllListeners()
+
+  //       // Since the stream server is still alive, for exchanges, later settlements from connector will still be accepted
+  //       return conn.end()
+  //     }
+  //   }
+  // }
 
   private wrapStreamPlugin(
     plugin: IPlugin,

@@ -11,41 +11,45 @@
   "scripts": {
     "build": "tsc",
     "fix": "run-s format lint",
-    "format": "prettier --write 'src/**/*.ts' ava.config.js package.json tsconfig.json tslint.json .prettierrc",
+    "format": "prettier --write 'src/**/*.ts' ava.config.js package.json tsconfig.json tslint.json",
     "lint": "tslint --fix --project .",
     "test": "nyc ava",
-    "test-inspect": "node --inspect-brk node_modules/ava/profile.js"
+    "test-inspect": "node --inspect-brk=9229 node_modules/ava/profile.js --serial"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Kava-Labs/switch-api.git"
   },
-  "author": "Kincaid O'Neil <kincaid@kava.io>",
+  "author": "Kincaid O'Neil <kincaid@kava.io> (https://kincaidoneil.com/)",
   "license": "UNLICENSED",
   "bugs": {
     "url": "https://github.com/Kava-Labs/switch-api/issues"
   },
   "homepage": "https://github.com/Kava-Labs/switch-api#readme",
   "dependencies": {
+    "@kava-labs/crypto-rate-utils": "^2.0.1",
+    "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
+    "eventemitter2": "^5.0.1",
     "eventemitter3": "^3.1.0",
     "ilp-logger": "^1.1.2",
     "ilp-packet": "^3.0.1",
-    "ilp-plugin-ethereum": "^3.0.0-beta.7",
-    "ilp-plugin-lightning": "1.0.0-beta.11",
-    "ilp-plugin-mini-accounts": "^3.5.2",
-    "ilp-plugin-xrp-asym-client": "^1.5.4",
+    "ilp-plugin-ethereum": "^3.0.0-beta.9",
+    "ilp-plugin-lightning": "^1.0.0-beta.16",
+    "ilp-plugin-mini-accounts": "^4.0.1",
+    "ilp-plugin-xrp-asym-client": "^1.6.0",
     "ilp-plugin-xrp-paychan-shared": "^4.1.1",
     "ilp-protocol-ildcp": "^2.0.0",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#ko-receive-only-tests",
+    "p-event": "^2.1.0",
     "ripple-keypairs": "^0.11.0",
     "ripple-lib": "^1.0.2",
     "web3": "1.0.0-beta.36"
   },
   "devDependencies": {
-    "@types/node": "^10.11.7",
-    "ava": "^1.0.0-rc.1",
-    "axios": "^0.18.0",
+    "@types/node": "^10.12.10",
+    "@types/p-event": "^1.3.0",
+    "ava": "^1.0.0-rc.2",
     "codecov": "^3.1.0",
     "envkey": "^1.2.2",
     "husky": "^1.1.2",
@@ -57,7 +61,7 @@
     "tslint-config-prettier": "^1.15.0",
     "tslint-eslint-rules": "^5.4.0",
     "tslint-immutable": "^4.8.0",
-    "typescript": "^3.1.4"
+    "typescript": "^3.2.1"
   },
   "husky": {
     "hooks": {

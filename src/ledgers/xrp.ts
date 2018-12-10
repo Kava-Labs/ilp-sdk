@@ -1,72 +1,93 @@
+import { convert, usd, xrp, xrpBase } from '@kava-labs/crypto-rate-utils'
+import BigNumber from 'bignumber.js'
 import createLogger from 'ilp-logger'
 import XrpAsymClient from 'ilp-plugin-xrp-asym-client'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
-import { Ledger } from '../ledger'
-import { convert, IUnit } from '../utils/convert'
+import { ILedgerOpts, Ledger } from '../ledger'
 import { PluginWrapper } from '../utils/middlewares'
 import { IPlugin } from '../utils/types'
 
-interface IXrpOpts {
+interface IXrpOpts extends ILedgerOpts {
   readonly xrpSecret: string
 }
 
 export class Xrp extends Ledger {
-  public readonly assetCode = 'XRP'
-  public readonly assetScale = 9
+  public static readonly assetCode = 'XRP'
+  public readonly baseUnit = xrpBase
+  public readonly exchangeUnit = xrp
   public readonly remoteConnectors = {
-    test: {
-      'Kava Labs': token => `btp+wss://:${token}@test.ilp.kava.io/xrp`
+    local: {
+      'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7443`
     },
-    live: {
-      'Kava Labs': token => `btp+wss://:${token}@ilp.kava.io/xrp`
+    testnet: {
+      'Kava Labs': (token: string) => `btp+wss://:${token}@test.ilp.kava.io/xrp`
+    },
+    mainnet: {
+      'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/xrp`
     }
   }
 
-  // TODO Do fx from USD so this remains stable, cuz XRP volatility
-  protected readonly maxInFlight = convert('0.2', IUnit.Xrp, IUnit.XrpBase)
-
   private readonly xrpSecret: string
-
-  constructor({ xrpSecret }: IXrpOpts) {
-    super()
-
-    this.xrpSecret = xrpSecret
-  }
-
-  private get xrpServer() {
-    return process.env.LEDGER_ENV === 'mainnet'
+  private readonly xrpAddress: string
+  private readonly xrpServer =
+    process.env.LEDGER_ENV === 'mainnet'
       ? 'wss://s1.ripple.com'
       : 'wss://s.altnet.rippletest.net:51233'
-  }
 
-  private get xrpAddress() {
-    return deriveAddress(deriveKeypair(this.xrpSecret).publicKey)
+  constructor({ xrpSecret, ...opts }: IXrpOpts) {
+    super(opts)
+
+    this.xrpSecret = xrpSecret
+    this.xrpAddress = deriveAddress(deriveKeypair(xrpSecret).publicKey)
   }
 
   protected async createPlugin(serverUri: string) {
+    /**
+     * TODO ?
+     */
+    const maxInFlight = await this.maxInFlight
+    const maxPrefund = maxInFlight.times(1.1).dp(0, BigNumber.ROUND_CEIL)
+    const maxCredit = maxPrefund
+      .plus(maxInFlight.times(2))
+      .dp(0, BigNumber.ROUND_CEIL)
+    const outgoingChannelAmountXRP = convert(
+      usd(10),
+      xrp(),
+      this.rateBackend
+    ).toString()
+
     const plugin: IPlugin = new XrpAsymClient({
       currencyScale: 9,
       secret: this.xrpSecret,
       server: serverUri,
-      xrpServer: this.xrpServer
+      xrpServer: this.xrpServer,
+      outgoingChannelAmountXRP
     })
 
+    // TODO If maxPacketAmount is a big number, the errors returned change, and seem related to the amount sent. Changing it to a string prevents this. Wtf was going on?
+    const that = this
     return new PluginWrapper({
       plugin,
-      assetCode: 'XRP',
-      assetScale: 9,
-      balance: {
-        maximum: this.maxInFlight.times(4),
-        settleThreshold: this.maxInFlight.times(2),
-        settleTo: this.maxInFlight.times(2)
+      ildcpInfo: {
+        clientAddress: '',
+        assetCode: 'XRP',
+        assetScale: 9
       },
-      log: createLogger('ilp-plugin-xrp-asym-client:balance')
+      balance: {
+        maximum: maxCredit,
+        settleThreshold: maxPrefund,
+        settleTo: maxPrefund
+      },
+      maxPacketAmount: maxInFlight.toString(),
+      log: createLogger('ilp-plugin-xrp-asym-client:wrapper')
     })
   }
 
   protected async destroyPlugin(plugin: IPlugin) {
+    await plugin.disconnect()
+
     const api = new RippleAPI({
       server: this.xrpServer
     })
@@ -91,7 +112,5 @@ export class Xrp extends Ledger {
         throw new Error('TODO')
       }
     }
-
-    return plugin.disconnect()
   }
 }

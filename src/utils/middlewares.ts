@@ -1,56 +1,63 @@
 import BigNumber from 'bignumber.js'
 import EventEmitter from 'eventemitter3'
 import {
-  deserializeIlpPacket,
   deserializeIlpPrepare,
-  IlpReject,
-  serializeIlpReject,
-  Type
+  deserializeIlpReply,
+  IlpPrepare,
+  IlpReply,
+  isFulfill,
+  isReject,
+  serializeIlpPrepare,
+  serializeIlpReply
 } from 'ilp-packet'
-import { convert } from './convert'
-import { IDataHandler, ILogger, IMoneyHandler, IPlugin } from './types'
-
-const TypePrepare = Type.TYPE_ILP_PREPARE
-const TypeFulfill = Type.TYPE_ILP_FULFILL
-const TypeReject = Type.TYPE_ILP_REJECT
+import { IldcpResponse } from 'ilp-protocol-ildcp'
+import {
+  DataHandler3,
+  ILogger,
+  IPlugin,
+  IPlugin3,
+  MoneyHandler3
+} from './types'
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
+// TODO Change this to F02 + log?
 const defaultDataHandler = () => {
   throw new Error('no request handler registered')
 }
 
+// TODO Change this to F02 + log?
 const defaultMoneyHandler = () => {
   throw new Error('no money handler registered')
 }
 
 export interface IWrapperOpts {
-  balance: {
+  plugin: IPlugin
+  log: ILogger
+  ildcpInfo: IldcpResponse
+  maxPacketAmount?: BigNumber.Value
+  balance?: {
     maximum?: BigNumber.Value
     settleTo?: BigNumber.Value
     settleThreshold?: BigNumber.Value
     minimum?: BigNumber.Value
   }
-  maxPacketAmount?: BigNumber.Value
-  plugin: IPlugin
-  assetCode: string
-  assetScale: number
-  log: ILogger
 }
 
-export class PluginWrapper extends EventEmitter implements IPlugin {
-  public static readonly version = 2
+export class PluginWrapper extends EventEmitter implements IPlugin3 {
+  public static readonly version = 3
 
   // Internal plugin
   private readonly plugin: IPlugin
-  private dataHandler: IDataHandler = defaultDataHandler
-  private moneyHandler: IMoneyHandler = defaultMoneyHandler
+  private dataHandler: DataHandler3 = defaultDataHandler
+  private moneyHandler: MoneyHandler3 = defaultMoneyHandler
 
   // Balance
+  private readonly enableBalance: boolean
   private readonly maximum: BigNumber
   private readonly settleTo: BigNumber
-  private readonly settleThreshold?: BigNumber
+  private readonly settleThreshold: BigNumber
   private readonly minimum: BigNumber
   private balance = new BigNumber(0)
   private payoutAmount: BigNumber
@@ -60,34 +67,34 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
 
   // Logging
   private readonly log: ILogger
-  private readonly assetCode: string
-  private readonly assetScale: number
+  private readonly ildcpInfo: IldcpResponse
 
   constructor({
     plugin,
     balance: {
       maximum = Infinity,
       settleTo = 0,
-      settleThreshold,
+      settleThreshold = -Infinity,
       minimum = -Infinity
-    },
+    } = {},
     maxPacketAmount = Infinity,
     log,
-    assetScale,
-    assetCode
+    ildcpInfo
   }: IWrapperOpts) {
     super()
 
+    this.log = log // TODO create a logger here
+
     this.maximum = new BigNumber(maximum).dp(0, BigNumber.ROUND_FLOOR)
     this.settleTo = new BigNumber(settleTo).dp(0, BigNumber.ROUND_FLOOR)
+    this.settleThreshold = new BigNumber(settleThreshold).dp(
+      0,
+      BigNumber.ROUND_FLOOR
+    )
     this.minimum = new BigNumber(minimum).dp(0, BigNumber.ROUND_CEIL)
 
-    if (settleThreshold) {
-      this.settleThreshold = new BigNumber(settleThreshold).dp(
-        0,
-        BigNumber.ROUND_FLOOR
-      )
-    }
+    this.enableBalance =
+      this.maximum.eq(Infinity) && this.settleThreshold.eq(-Infinity)
 
     // If we’re not prefunding, the amount to settle should be limited by the total packets we’ve fulfilled
     this.payoutAmount = this.settleTo.gt(0)
@@ -95,31 +102,19 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
       : new BigNumber(0)
 
     // Validate balance configuration: max >= settleTo >= settleThreshold >= min
-    if (this.settleThreshold) {
-      if (!this.maximum.gte(this.settleTo)) {
-        throw new Error(
-          'Invalid balance configuration: maximum balance must be greater than or equal to settleTo'
-        )
-      }
-      if (!this.settleTo.gte(this.settleThreshold)) {
-        throw new Error(
-          'Invalid balance configuration: settleTo must be greater than or equal to settleThreshold'
-        )
-      }
-      if (!this.settleThreshold.gte(this.minimum)) {
-        throw new Error(
-          'Invalid balance configuration: settleThreshold must be greater than or equal to minimum balance'
-        )
-      }
-    } else {
-      if (!this.maximum.gt(this.minimum)) {
-        throw new Error(
-          'Invalid balance configuration: maximum balance must be greater than minimum balance'
-        )
-      }
-
-      this.log.trace(
-        `Auto-settlement disabled: plugin is in receive-only mode since no settleThreshold was configured`
+    if (!this.maximum.gte(this.settleTo)) {
+      throw new Error(
+        'Invalid balance configuration: maximum balance must be greater than or equal to settleTo'
+      )
+    }
+    if (!this.settleTo.gte(this.settleThreshold)) {
+      throw new Error(
+        'Invalid balance configuration: settleTo must be greater than or equal to settleThreshold'
+      )
+    }
+    if (!this.settleThreshold.gte(this.minimum)) {
+      throw new Error(
+        'Invalid balance configuration: settleThreshold must be greater than or equal to minimum balance'
       )
     }
 
@@ -129,19 +124,18 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
 
     this.plugin = plugin
 
-    this.plugin.registerDataHandler((data: Buffer) => this.handleData(data))
+    this.plugin.registerDataHandler(async (data: Buffer) =>
+      serializeIlpReply(await this.handleData(deserializeIlpPrepare(data)))
+    )
     this.plugin.registerMoneyHandler((amount: string) =>
-      this.handleMoney(amount)
+      this.handleMoney(new BigNumber(amount))
     )
 
     this.plugin.on('connect', () => this.emit('connect'))
     this.plugin.on('disconnect', () => this.emit('disconnect'))
     this.plugin.on('error', (err: Error) => this.emit('error', err))
 
-    this.assetScale = assetScale
-    this.assetCode = assetCode
-
-    this.log = log
+    this.ildcpInfo = ildcpInfo
   }
 
   public async connect(opts: object) {
@@ -157,61 +151,43 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
     return this.plugin.isConnected()
   }
 
-  public async sendData(data: Buffer) {
-    const next = () => this.plugin.sendData(data)
+  public async sendData(prepare: IlpPrepare): Promise<IlpReply> {
+    const next = async () =>
+      deserializeIlpReply(
+        await this.plugin.sendData(serializeIlpPrepare(prepare))
+      )
 
-    if (data[0] === TypePrepare) {
-      const { amount } = deserializeIlpPrepare(data)
-
-      if (amount === '0') {
-        return next()
-      }
-
-      if (new BigNumber(amount).gt(this.maxPacketAmount)) {
-        return serializeIlpReject({
-          code: 'F08',
-          triggeredBy: '',
-          message: 'Packet size is too large.',
-          data: Buffer.from(
-            JSON.stringify({
-              receivedAmount: amount,
-              maximumAmount: this.maxPacketAmount.toString()
-            })
-          )
-        })
-      }
-
-      const res = await next()
-
-      const packet = deserializeIlpPacket(res)
-      const isFulfill = res[0] === TypeFulfill
-      const isReject = res[0] === TypeReject
-
-      // Attempt to settle on fulfills and* T04s (to resolve stalemates)
-      const attemptSettle =
-        isFulfill || (isReject && (packet.data as IlpReject).code === 'T04')
-      if (attemptSettle) {
-        try {
-          this.subBalance(amount)
-        } catch (err) {
-          this.log.trace(err.message)
-          return serializeIlpReject({
-            code: 'F00',
-            message: 'Insufficient funds',
-            triggeredBy: '',
-            data: Buffer.alloc(0)
-          })
-        }
-        // If the balance change succeeds, also update payout amount
-        this.payoutAmount = this.payoutAmount.plus(amount)
-
-        this.attemptSettle()
-      }
-
-      return res
-    } else {
+    const { amount } = prepare
+    if (amount === '0') {
       return next()
     }
+
+    const reply = await next()
+
+    if (isFulfill(reply)) {
+      try {
+        this.subBalance(amount)
+        // If the balance change succeeds, also update payout amount
+        this.payoutAmount = this.payoutAmount.plus(amount)
+      } catch (err) {
+        this.log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
+        return {
+          code: 'F00',
+          message: 'Insufficient funds',
+          triggeredBy: this.ildcpInfo.clientAddress,
+          data: Buffer.alloc(0)
+        }
+      }
+    }
+
+    // Attempt to settle on fulfills and* T04s (to resolve stalemates)
+    const shouldSettle =
+      isFulfill(reply) || (isReject(reply) && reply.code === 'T04')
+    if (shouldSettle) {
+      this.attemptSettle()
+    }
+
+    return reply
   }
 
   public async sendMoney() {
@@ -220,7 +196,9 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
     )
   }
 
-  public registerDataHandler(handler: IDataHandler) {
+  public registerDataHandler(
+    handler: (parsedPrepare: IlpPrepare) => Promise<IlpReply>
+  ) {
     if (this.dataHandler !== defaultDataHandler) {
       throw new Error('request handler is already registered')
     }
@@ -228,7 +206,7 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
     this.dataHandler = handler
   }
 
-  public registerMoneyHandler(handler: IMoneyHandler) {
+  public registerMoneyHandler(handler: (amount: BigNumber) => Promise<void>) {
     if (this.moneyHandler !== defaultMoneyHandler) {
       throw new Error('money handler is already registered')
     }
@@ -244,57 +222,53 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
     this.moneyHandler = defaultMoneyHandler
   }
 
-  private async handleData(data: Buffer) {
-    const next = () => this.dataHandler(data)
+  private async handleData(prepare: IlpPrepare): Promise<IlpReply> {
+    const next = () => this.dataHandler(prepare)
 
-    if (data[0] === TypePrepare) {
-      const { amount } = deserializeIlpPrepare(data)
+    // Ignore 0 amount packets
+    const { amount } = prepare
+    if (amount === '0') {
+      return next()
+    }
 
-      // Ignore 0 amount packets
-      if (amount === '0') {
-        return next()
-      }
-
-      if (new BigNumber(amount).gt(this.maxPacketAmount)) {
-        return serializeIlpReject({
-          code: 'F08',
-          triggeredBy: '',
-          message: 'Packet size is too large.',
-          data: Buffer.from(
-            JSON.stringify({
-              receivedAmount: amount,
-              maximumAmount: this.maxPacketAmount.toString()
-            })
-          )
-        })
-      }
-
-      try {
-        this.addBalance(amount)
-      } catch (err) {
-        this.log.trace(err.message)
-        return serializeIlpReject({
-          code: 'T04',
-          message: 'Exceeded maximum balance',
-          triggeredBy: '',
-          data: Buffer.alloc(0)
-        })
-      }
-
-      const res = await next()
-
-      if (res[0] === TypeReject) {
-        // Allow this to throw if balance drops below minimum
-        this.subBalance(amount)
-      } else if (res[0] === TypeFulfill) {
-        this.attemptSettle()
+    if (new BigNumber(amount).gt(this.maxPacketAmount)) {
+      return {
+        code: 'F08',
+        triggeredBy: this.ildcpInfo.clientAddress,
+        message: 'Packet size is too large.',
+        data: Buffer.from(
+          JSON.stringify({
+            receivedAmount: amount,
+            maximumAmount: this.maxPacketAmount.toString()
+          })
+        )
       }
     }
 
-    return next()
+    try {
+      this.addBalance(amount)
+    } catch (err) {
+      this.log.trace(err.message)
+      return {
+        code: 'T04',
+        message: 'Exceeded maximum balance',
+        triggeredBy: this.ildcpInfo.clientAddress,
+        data: Buffer.alloc(0)
+      }
+    }
+
+    const reply = await next()
+    if (isReject(reply)) {
+      // Allow this to throw if balance drops below minimum
+      this.subBalance(amount)
+    } else {
+      this.attemptSettle()
+    }
+
+    return reply
   }
 
-  private handleMoney(amount: string) {
+  private handleMoney(amount: BigNumber) {
     const next = () => this.moneyHandler(amount)
 
     // Allow this to throw if balance drops below minimum
@@ -304,10 +278,6 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
 
   private async attemptSettle(): Promise<void> {
     // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
-    if (!this.settleThreshold) {
-      return
-    }
-
     const shouldSettle = this.settleThreshold.gt(this.balance)
     if (!shouldSettle) {
       return
@@ -347,6 +317,10 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
   }
 
   private addBalance(amount: BigNumber.Value) {
+    if (!this.enableBalance) {
+      return
+    }
+
     if (new BigNumber(amount).isZero()) {
       return
     }
@@ -369,6 +343,10 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
   }
 
   private subBalance(amount: BigNumber.Value) {
+    if (!this.enableBalance) {
+      return
+    }
+
     if (new BigNumber(amount).isZero()) {
       return
     }
@@ -393,6 +371,8 @@ export class PluginWrapper extends EventEmitter implements IPlugin {
   }
 
   private format(amount: BigNumber.Value) {
-    return `${convert(amount, 0, this.assetScale)} ${this.assetCode}`
+    return `${new BigNumber(amount).shiftedBy(
+      -this.ildcpInfo.assetScale
+    )} ${this.ildcpInfo.assetCode.toLowerCase()}`
   }
 }
