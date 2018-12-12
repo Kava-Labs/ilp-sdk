@@ -9,14 +9,14 @@ import { generateSecret, sha256 } from './crypto'
 //   UNREACHABLE_ERROR
 // } from './packet'
 
-import createLogger from 'ilp-logger'
+import createLogger from './log'
 const log = createLogger('switch-api:stream')
 
 /** End stream if no packets are successfully fulfilled within this interval */
 const IDLE_TIMEOUT = 30000
 
 /** Interval between sending each packet in flight */
-const INFLIGHT_DELAY = 5 // TODO?
+const INFLIGHT_DELAY = 20 // TODO?
 
 /** Amount of time in the future when packets should expire */
 const EXPIRATION_WINDOW = 10000
@@ -102,11 +102,12 @@ export const streamMoney = ({
     })
 
     let idleTimer: NodeJS.Timeout
-    let streamer: NodeJS.Timeout
+    // let streamer: NodeJS.Timeouts
 
+    // TODO this should also stop logging from other requests as they come back
     const endStream = () => {
       // Don't send any more packets
-      clearInterval(streamer)
+      // clearInterval(streamer)
       // Remove idle timer
       clearTimeout(idleTimer)
       // Remove handler & reject any subsequent packets that are already in flight
@@ -136,7 +137,7 @@ export const streamMoney = ({
      *   as the roundtrip latency between two nodes (100+ ms)
      */
     let packetCount = 0
-    streamer = setInterval(async () => {
+    const sendPacket = async () => {
       const sourceAmount = nextPacketAmount(packetAmount)
       if (sourceAmount.lte(0)) {
         return endStream()
@@ -211,5 +212,9 @@ export const streamMoney = ({
         )
         bumpIdle()
       }
-    }, INFLIGHT_DELAY)
+
+      sendPacket()
+    }
+
+    sendPacket()
   })
