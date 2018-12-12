@@ -1,11 +1,11 @@
 import { convert, eth, gwei, usd, wei } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import createLogger from 'ilp-logger'
 import EthereumPlugin from 'ilp-plugin-ethereum'
 import pEvent from 'p-event'
 import Web3 from 'web3'
 import { HttpProvider } from 'web3/providers'
 import { ILedgerOpts, Ledger } from '../ledger'
+import createLogger from '../utils/log'
 import { PluginWrapper } from '../utils/middlewares'
 import { streamMoney } from '../utils/stream'
 import { IPlugin } from '../utils/types'
@@ -82,11 +82,11 @@ export class Eth extends Ledger {
         server: serverUri
       },
       {
-        store: this.store
+        store: this.store,
+        log: createLogger('ilp-plugin-ethereum')
       }
     ) as unknown) as IPlugin // TODO fix the incompatibilities between eventemitters
 
-    const that = this
     return new PluginWrapper({
       plugin,
       ildcpInfo: {
@@ -94,7 +94,7 @@ export class Eth extends Ledger {
         assetCode: 'ETH',
         assetScale: 9
       },
-      log: createLogger('ilp-plugin-ethereum:max-packet'),
+      log: createLogger('ilp-plugin-ethereum:wrapper'),
       maxPacketAmount: maxInFlight.toString()
     })
   }

@@ -1,11 +1,11 @@
 import { convert, usd, xrp, xrpBase } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import createLogger from 'ilp-logger'
 import XrpAsymClient from 'ilp-plugin-xrp-asym-client'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
 import { ILedgerOpts, Ledger } from '../ledger'
+import createLogger from '../utils/log'
 import { PluginWrapper } from '../utils/middlewares'
 import { IPlugin } from '../utils/types'
 
@@ -58,13 +58,18 @@ export class Xrp extends Ledger {
       this.rateBackend
     ).toString()
 
-    const plugin: IPlugin = new XrpAsymClient({
-      currencyScale: 9,
-      secret: this.xrpSecret,
-      server: serverUri,
-      xrpServer: this.xrpServer,
-      outgoingChannelAmountXRP
-    })
+    const plugin: IPlugin = new XrpAsymClient(
+      {
+        currencyScale: 9,
+        secret: this.xrpSecret,
+        server: serverUri,
+        xrpServer: this.xrpServer,
+        outgoingChannelAmountXRP
+      },
+      {
+        log: createLogger('ilp-plugin-xrp-asym-client')
+      }
+    )
 
     // TODO If maxPacketAmount is a big number, the errors returned change, and seem related to the amount sent. Changing it to a string prevents this. Wtf was going on?
     const that = this

@@ -1,8 +1,8 @@
 import { btc, satoshi } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import createLogger from 'ilp-logger'
 import LightningPlugin from 'ilp-plugin-lightning'
 import { ILedgerOpts, Ledger } from '../ledger'
+import createLogger from '../utils/log'
 import { PluginWrapper } from '../utils/middlewares'
 import { IPlugin } from '../utils/types'
 
@@ -57,24 +57,29 @@ export class Btc extends Ledger {
       .plus(maxInFlight.times(2))
       .dp(0, BigNumber.ROUND_CEIL)
 
-    const plugin = new LightningPlugin({
-      role: 'client',
-      maxPacketAmount: maxInFlight,
-      lndIdentityPubkey: this.lndPubKey,
-      lndHost: this.lndHost,
-      lnd: {
+    const plugin = new LightningPlugin(
+      {
+        role: 'client',
+        maxPacketAmount: maxInFlight,
+        lndIdentityPubkey: this.lndPubKey,
         lndHost: this.lndHost,
-        tlsCertInput: this.tlsCert,
-        macaroonInput: this.macaroon
+        lnd: {
+          lndHost: this.lndHost,
+          tlsCertInput: this.tlsCert,
+          macaroonInput: this.macaroon
+        },
+        // @ts-ignore
+        server: serverUri,
+        balance: {
+          maximum: maxCredit,
+          settleTo: maxPrefund,
+          settleThreshold: maxPrefund
+        }
       },
-      // @ts-ignore
-      server: serverUri,
-      balance: {
-        maximum: maxCredit,
-        settleTo: maxPrefund,
-        settleThreshold: maxPrefund
+      {
+        log: createLogger('ilp-plugin-lightning')
       }
-    })
+    )
 
     return new PluginWrapper({
       plugin,
