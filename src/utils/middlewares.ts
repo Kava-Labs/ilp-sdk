@@ -300,6 +300,7 @@ export class PluginWrapper extends EventEmitter implements IPlugin3 {
 
     try {
       this.addBalance(amount)
+      this.payoutAmount = this.payoutAmount.minus(amount)
     } catch (err) {
       // This should never happen, since the constructor verifies maximum >= settleTo
       return this.log.error(
