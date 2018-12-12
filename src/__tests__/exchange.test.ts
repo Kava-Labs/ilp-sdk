@@ -18,7 +18,7 @@ import 'envkey'
 import { performance } from 'perf_hooks'
 import { streamMoney } from '../utils/stream'
 
-process.env.LEDGER_ENV = 'testnet' // TODO does envkeys overwrite this?
+process.env.LEDGER_ENV = process.env.LEDGER_ENV || 'testnet'
 
 BigNumber.config({ EXPONENTIAL_AT: 1e9 }) // Almost never use exponential notation
 
