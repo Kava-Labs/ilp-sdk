@@ -1,11 +1,11 @@
 import { convert } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
-import { CoreUplink } from 'uplink'
+import { Uplink } from '../uplink'
 import { Reader } from 'oer-utils'
-import { generateSecret, sha256 } from './crypto'
-import createLogger from './log'
-import { APPLICATION_ERROR } from './packet'
+import { generateSecret, sha256 } from '../utils/crypto'
+import createLogger from '../utils/log'
+import { APPLICATION_ERROR } from '../utils/packet'
 
 const log = createLogger('switch-api:stream')
 
@@ -19,9 +19,9 @@ export interface StreamMoneyOpts {
   /** Amount of money to be sent over stream, in units of exchange */
   amount: BigNumber
   /** Send assets via the given source ledger/plugin */
-  source: CoreUplink
+  source: Uplink
   /** Receive assets via the given destination ledger/plugin */
-  dest: CoreUplink
+  dest: Uplink
   /**
    * Maximum percentage of slippage allowed. If the per-packet exchange rate
    * drops below the price oracle's rate minus this slippage,
