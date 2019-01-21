@@ -7,7 +7,7 @@ import {
   isReject,
   serializeIlpReject
 } from 'ilp-packet'
-import { DataHandler, Logger, MoneyHandler, Plugin } from './types'
+import { DataHandler, Logger, MoneyHandler, Plugin } from '../types/plugin'
 import { MemoryStore } from './store'
 import { defaultDataHandler, defaultMoneyHandler } from './packet'
 

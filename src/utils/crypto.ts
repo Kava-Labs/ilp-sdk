@@ -22,4 +22,5 @@ export const base64url = (buffer: Buffer) =>
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
 
+// TODO This is super unclear... rename to generateAuthToken() ? Use it elsewhere?
 export const generateToken = async () => base64url(await generateSecret())
