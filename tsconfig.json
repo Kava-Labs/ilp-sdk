@@ -10,8 +10,8 @@
     "sourceMap": true,
     "esModuleInterop": true,
 
-    // TODO: Disabled due to recompliation issues with ilp-plugin-btp
-    // "strict": true /* Enable all strict type-checking options. */,
+    "strict": true /* Enable all strict type-checking options. */,
+    "strictFunctionTypes": false, // TODO Should I disable
 
     "resolveJsonModule": true /* Required by Ethereum plugin for loading ABIs. */,
 
@@ -20,11 +20,15 @@
     "traceResolution": false /* Report module resolution log messages. */,
     "listEmittedFiles": false /* Print names of generated files part of the compilation. */,
     "listFiles": false /* Print names of files part of the compilation. */,
-    "pretty": true /* Stylize errors and messages using color and context. */
+    "pretty": true /* Stylize errors and messages using color and context. */,
     // "paths": {
     //   "@/*": ["./*"],
     //   "@ledgers/*": ["./ledgers/*"],
     //   "@test/*": ["./__tests__/*"]
     // }
+    "typeRoots": ["node_modules/@types", "src/types"],
+    "paths": {
+      "ilp-plugin-xrp-asym-client": ["./types/ilp-plugin-xrp-asym-client"]
+    }
   }
 }
