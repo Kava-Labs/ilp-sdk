@@ -1,27 +1,35 @@
 import { convert } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
-import { Uplink } from '../uplink'
+import {
+  sendPacket,
+  ReadyUplink,
+  deregisterPacketHandler,
+  registerPacketHandler
+} from '../uplink'
 import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
+import { State, getSettler } from '../api'
 
 const log = createLogger('switch-api:stream')
+
+BigNumber.config({ EXPONENTIAL_AT: 1e9 }) // Almost never use exponential notation
 
 /** End stream if no packets are successfully fulfilled within this interval */
 const IDLE_TIMEOUT = 10000
 
 /** Amount of time in the future when packets should expire */
-const EXPIRATION_WINDOW = 2000
+const EXPIRATION_WINDOW = 5000
 
 export interface StreamMoneyOpts {
   /** Amount of money to be sent over stream, in units of exchange */
   amount: BigNumber
   /** Send assets via the given source ledger/plugin */
-  source: Uplink
+  source: ReadyUplink
   /** Receive assets via the given destination ledger/plugin */
-  dest: Uplink
+  dest: ReadyUplink
   /**
    * Maximum percentage of slippage allowed. If the per-packet exchange rate
    * drops below the price oracle's rate minus this slippage,
@@ -30,36 +38,19 @@ export interface StreamMoneyOpts {
   slippage?: BigNumber.Value
 }
 
-/**
- * TODO ALL THE DEPENDENCIES
- *
- * SOURCE UPLINK:
- * - asset code
- * - asset scale / exchangeUnit / baseUnit
- * - availableCredit
- * - sendPacket() => (requires plugin)
- *
- * DEST UPLINK:
- * - asset code
- * - base unit
- * - registerPacketHandler() => (requires plugin)
- *    - sets streamClientHandler within closure for connecting uplink
- *           - Alternative: registerPacketHandler(uplink) =>
- *                  Internally, deregisters the root plugin packet handler, and then re-registers it with the new one?
- *                  The stream client/server handlers would be properties on the Uplink data structure
- * - clientAddress
- */
-
-export const streamMoney = async ({
+export const streamMoney = (state: State) => async ({
   amount,
   source,
   dest,
   slippage = 0.01
 }: StreamMoneyOpts): Promise<void> => {
-  // TODO Add guards to throw error if there's insufficient capacity!
-  // Weird cases to handle though: streaming credit off of connector & sending packet to open eth channel
+  const sourceSettler = getSettler(state)(source.settlerType)
+  const destSettler = getSettler(state)(dest.settlerType)
 
-  const amountToSend = convert(source.exchangeUnit(amount), source.baseUnit())
+  const amountToSend = convert(
+    sourceSettler.exchangeUnit(amount),
+    sourceSettler.baseUnit()
+  )
 
   /**
    * Why no test packets?
@@ -78,8 +69,16 @@ export const streamMoney = async ({
    *   and use that to determine whether to fulfill it.
    */
 
+  const format = (amount: BigNumber) =>
+    `${convert(
+      sourceSettler.baseUnit(amount),
+      sourceSettler.exchangeUnit()
+    )} ${sourceSettler.assetCode.toLowerCase()}`
+
   log.debug(
-    `starting streaming exchange from ${source.assetCode} -> ${dest.assetCode}`
+    `starting streaming exchange from ${sourceSettler.assetCode} -> ${
+      destSettler.assetCode
+    }`
   )
 
   // If no packets get through for 10 seconds, kill the stream
@@ -94,28 +93,81 @@ export const streamMoney = async ({
   let totalFulfilled = new BigNumber(0)
   let maxPacketAmount = new BigNumber(Infinity)
 
-  const sendPacket = async (): Promise<void> => {
+  const trySendPacket = async (): Promise<void> => {
     const isFailing = Date.now() > timeout
     if (isFailing) {
-      log.error('stream timed out: no packets fulfilled within idle window.')
-      throw new Error() // Stream failed
+      log.error('stream timed out: no packets fulfilled within idle window')
+      return Promise.reject()
     }
 
     const remainingAmount = amountToSend.minus(totalFulfilled)
-    if (remainingAmount.lte(0)) {
-      return // Stream ended successfully
+    if (remainingAmount.isZero()) {
+      return log.info(
+        `stream succeeded: total amount of ${format(
+          amountToSend
+        )} was fulfilled`
+      )
+    } else if (remainingAmount.lte(0)) {
+      return log.info(
+        `stream sent too much: ${format(
+          remainingAmount.negated()
+        )} more was fulfilled above the requested amount of ${format(
+          amountToSend
+        )}`
+      )
     }
 
-    if (source.availableCredit.lte(0)) {
-      await new Promise(r => setTimeout(r, 5)) // Wait 5 ms to see if additional credit is available
-      return sendPacket()
+    const availableToSend = source.availableToSend$.getValue()
+    const remainingToSend = convert(
+      sourceSettler.baseUnit(remainingAmount),
+      sourceSettler.exchangeUnit()
+    )
+    if (remainingToSend.gt(availableToSend)) {
+      log.error(
+        `stream failed: insufficient outgoing capacity to fulfill remaining amount of ${format(
+          remainingAmount
+        )}`
+      )
+      return Promise.reject()
     }
 
-    const packetAmount = BigNumber.min(
-      source.availableCredit,
+    const availableToReceive = dest.availableToReceive$.getValue()
+    const remainingToReceive = convert(
+      sourceSettler.baseUnit(remainingAmount),
+      destSettler.exchangeUnit(),
+      state.rateBackend
+    )
+    if (remainingToReceive.gt(availableToReceive)) {
+      log.error(
+        `stream failed: insufficient incoming capacity to fulfill remaining amount of ${format(
+          remainingAmount
+        )}`
+      )
+      return Promise.reject()
+    }
+
+    const availableToDebit = convert(
+      sourceSettler.exchangeUnit(source.availableToDebit$.getValue()),
+      sourceSettler.baseUnit()
+    )
+    if (availableToDebit.lte(0)) {
+      await new Promise(r => setTimeout(r, 5)) // Wait 5 ms to see if additional debt is available to be collected
+      return trySendPacket()
+    }
+
+    let packetAmount = BigNumber.min(
+      availableToDebit,
       remainingAmount,
       maxPacketAmount
     )
+
+    // Distribute the remaining amount such that the per-packet amount is approximately equal
+    const remainingNumPackets = remainingAmount
+      .div(packetAmount)
+      .dp(0, BigNumber.ROUND_CEIL)
+    packetAmount = remainingAmount
+      .div(remainingNumPackets)
+      .dp(0, BigNumber.ROUND_CEIL)
 
     const packetNum = (prepareCount += 1)
 
@@ -131,24 +183,29 @@ export const streamMoney = async ({
       sourceAmount: BigNumber.Value,
       destAmount: BigNumber.Value
     ) =>
-      convert(source.baseUnit(sourceAmount), dest.baseUnit(), rateApi)
-        .times(new BigNumber(1).minus(slippage))
-        .integerValue(BigNumber.ROUND_DOWN)
-        .lt(destAmount)
+      new BigNumber(destAmount).gte(
+        convert(
+          sourceSettler.baseUnit(sourceAmount),
+          destSettler.baseUnit(),
+          state.rateBackend
+        )
+          .times(new BigNumber(1).minus(slippage))
+          .integerValue(BigNumber.ROUND_CEIL)
+      )
 
     const correctCondition = (someCondition: Buffer) =>
       executionCondition.equals(someCondition)
 
-    dest.registerPacketHandler(
+    registerPacketHandler(
       async ({ executionCondition: someCondition, amount: destAmount }) =>
         acceptExchangeRate(packetAmount, destAmount) &&
         correctCondition(someCondition)
           ? fulfillPacket
           : APPLICATION_ERROR
-    )
+    )(dest)
 
     log.debug(`sending packet ${packetNum} for ${packetAmount}`)
-    const response = await source.sendPacket({
+    const response = await sendPacket(source, {
       destination: dest.clientAddress,
       amount: packetAmount.toString(),
       executionCondition,
@@ -190,7 +247,9 @@ export const streamMoney = async ({
       }
     } else if (isFulfill(response)) {
       log.debug(
-        `packet ${packetNum} fulfilled for source amount ${packetAmount}`
+        `packet ${packetNum} fulfilled for source amount ${format(
+          packetAmount
+        )}`
       )
       bumpIdle()
 
@@ -198,14 +257,14 @@ export const streamMoney = async ({
       fulfillCount += 1
     }
 
-    dest.deregisterPacketHandler()
-    return sendPacket()
+    deregisterPacketHandler(dest)
+    return trySendPacket()
   }
 
-  return sendPacket().finally(() => {
-    dest.deregisterPacketHandler()
+  return trySendPacket().finally(() => {
+    deregisterPacketHandler(dest)
     log.debug(
-      `stream ended. ${fulfillCount} packets fulfilled of ${prepareCount} total packets`
+      `stream ended: ${fulfillCount} packets fulfilled of ${prepareCount} total packets`
     )
   })
 }
