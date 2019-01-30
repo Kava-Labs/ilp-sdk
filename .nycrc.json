@@ -1,0 +1,7 @@
+{
+  "include": ["src/**/*.ts"],
+  "exclude": ["**/__tests__/**/*.ts", "**/*.d.ts"],
+  "extension": [".ts"],
+  "require": ["ts-node/register"],
+  "reporter": ["text", "html", "lcov"]
+}

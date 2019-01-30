@@ -15,13 +15,11 @@ export interface SettlementEngine {
   assetScale: number
   baseUnit: (amount?: BigNumber.Value) => AssetUnit
   exchangeUnit: (amount?: BigNumber.Value) => AssetUnit
+  /**
+   * Mapping of BTP websocket URIs for remote connectors,
+   * specific to the ledger env of the settlement engine
+   */
   remoteConnectors: {
-    local: ConnectorList
-    testnet: ConnectorList
-    mainnet: ConnectorList
+    readonly [name: string]: (token: string) => string
   }
-}
-
-interface ConnectorList {
-  readonly [name: string]: (token: string) => string
 }

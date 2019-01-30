@@ -12,6 +12,8 @@ import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
 import { State, getSettler } from '../api'
+import { combineLatest } from 'rxjs'
+import { first } from 'rxjs/operators'
 
 const log = createLogger('switch-api:stream')
 
@@ -38,6 +40,14 @@ export interface StreamMoneyOpts {
   slippage?: BigNumber.Value
 }
 
+/**
+ * Send money between the two upinks
+ *
+ * @param amount Total (maximum) amount to send, in units of exchange of source uplink
+ * @param source Source uplink to send outgoing money
+ * @param dest Destination uplink to receive incoming money
+ * @param slippage Maximum per-packet slippage from latest exchange rate as decimal
+ */
 export const streamMoney = (state: State) => async ({
   amount,
   source,
@@ -93,7 +103,8 @@ export const streamMoney = (state: State) => async ({
   let totalFulfilled = new BigNumber(0)
   let maxPacketAmount = new BigNumber(Infinity)
 
-  const trySendPacket = async (): Promise<void> => {
+  const trySendPacket = async (): Promise<any> => {
+    // TODO Add error for "poor exchange rate" if every (?) error within window was due to an exchange rate problem?
     const isFailing = Date.now() > timeout
     if (isFailing) {
       log.error('stream timed out: no packets fulfilled within idle window')
@@ -107,6 +118,21 @@ export const streamMoney = (state: State) => async ({
           amountToSend
         )} was fulfilled`
       )
+
+      // Wait for the settlements to finish
+      // TODO Add timeout here to reject if it doesn't occur?
+      // TODO This doesn't work when settlement is disabled/streaming credit off the connector
+      // return combineLatest(source.availableToDebit$, dest.availableToCredit$)
+      //   .pipe(
+      //     first(
+      //       ([availableToDebit, availableToCredit]) =>
+      //         // Ensure the source uplink has finished prefunding again
+      //         availableToDebit.gte(source.idleAvailableToDebit) &&
+      //         // Ensure the peer has finished settling up with the destination uplink
+      //         availableToCredit.gte(dest.idleAvailableToCredit)
+      //     )
+      //   )
+      //   .toPromise()
     } else if (remainingAmount.lte(0)) {
       return log.info(
         `stream sent too much: ${format(
@@ -147,11 +173,15 @@ export const streamMoney = (state: State) => async ({
     }
 
     const availableToDebit = convert(
-      sourceSettler.exchangeUnit(source.availableToDebit$.getValue()),
+      sourceSettler.exchangeUnit(source.availableToDebit$.value),
       sourceSettler.baseUnit()
     )
     if (availableToDebit.lte(0)) {
-      await new Promise(r => setTimeout(r, 5)) // Wait 5 ms to see if additional debt is available to be collected
+      /**
+       * Wait 5 ms to see if we've prefunded the connector
+       * some more and have a balance to spend down from
+       */
+      await new Promise(r => setTimeout(r, 5))
       return trySendPacket()
     }
 
@@ -161,7 +191,7 @@ export const streamMoney = (state: State) => async ({
       maxPacketAmount
     )
 
-    // Distribute the remaining amount such that the per-packet amount is approximately equal
+    // Distribute the remaining amount to send such that the per-packet amount is approximately equal
     const remainingNumPackets = remainingAmount
       .div(packetAmount)
       .dp(0, BigNumber.ROUND_CEIL)
@@ -198,8 +228,8 @@ export const streamMoney = (state: State) => async ({
 
     registerPacketHandler(
       async ({ executionCondition: someCondition, amount: destAmount }) =>
-        acceptExchangeRate(packetAmount, destAmount) &&
-        correctCondition(someCondition)
+        acceptExchangeRate(packetAmount, destAmount) && // TODO Respond with F04: insufficient destination amount instead?
+        correctCondition(someCondition) // TODO Respond with F06: unexpected payment instead?
           ? fulfillPacket
           : APPLICATION_ERROR
     )(dest)

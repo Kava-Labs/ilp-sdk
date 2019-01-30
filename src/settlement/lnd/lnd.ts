@@ -1,125 +1,45 @@
-import {
-  NewUplink,
-  TotalReceived,
-  AvailableToSend,
-  AvailableToDebit,
-  AvailableToReceive, // TODO !
-  UplinkConfig
-} from '../../uplink'
+import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
+import { State, LedgerEnv, getSettler } from '../../api'
 import BigNumber from 'bignumber.js'
-import { btc, satoshi, convert, RateApi } from '@kava-labs/crypto-rate-utils'
+import { fromNullable, Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
-  LightningAccount,
-  LightningService,
   ChannelBalanceRequest,
   connectLnd,
-  waitForReady,
-  createPaymentStream,
   createInvoiceStream,
-  InvoiceStream,
-  PaymentStream
+  createPaymentStream,
+  GetInfoRequest,
+  LndService,
+  waitForReady,
+  Invoice,
+  SendResponse,
+  PaymentStream,
+  InvoiceStream
 } from 'ilp-plugin-lightning'
-import { SettlementEngineType, SettlementEngine } from '..'
+import { BehaviorSubject, merge, from, interval, fromEvent } from 'rxjs'
+import { map, mergeMap, throttleTime, filter, sample } from 'rxjs/operators'
+import { URL } from 'url'
+import { SettlementEngine, SettlementEngineType } from '..'
+import {
+  getNativeMaxInFlight,
+  getPluginBalanceConfig,
+  getPluginMaxPacketAmount,
+  distinctBigNum,
+  BaseUplink,
+  ReadyUplink,
+  BaseUplinkConfig
+} from '../../uplink'
 import createLogger from '../../utils/log'
 import { MemoryStore } from '../../utils/store'
-import { Maybe } from 'purify-ts/adts/Maybe'
-import { ApiUtils } from 'api'
-import { fromStream } from 'rxjs/Rx/Node' // TODO !
+import { Flavor } from '../../types/util'
 
-/**
- * VALIDATION
- * TODO -- Organize all of this crap!
- */
-
-import { URL } from 'url'
-import { publicKeyVerify } from 'secp256k1'
-
-// TODO Brand is stricter than flavor -- that's both good and bad
-
-type Brand<K, T> = K & { __brand: T }
-
-interface Flavoring<FlavorT> {
-  _type?: FlavorT
-}
-export type Flavor<T, FlavorT> = T & Flavoring<FlavorT>
-
-/** Unvalidated LND credentials directly from the user */
-interface UnvalidatedLndCredentials {
-  /** Lightning secp256k1 public key */
-  identityPublicKey: string
-  /** Hostname and gRPC port for the Lightning connection */
-  host: string
-  /** TLS cert as a Base64-encoded string or Buffer (e.g. using `fs.readFile`) */
-  tlsCert: string | Buffer
-  /** LND macaroon as Base64-encoded string or Buffer (e.g. using `fs.readFile`) */
-  macaroon: string | Buffer
-}
-
-/** Valid LND credentials that successfully authenticated with the remote node */
-type ValidatedLndCredentials = Brand<ParsedLndCredentials, 'authenticated'>
-
-/** Verify an secp256k1 public key exists, such as Lightning identity public key */
-const verifyIdentityPublicKey = (publicKey: string): Maybe<string> =>
-  Just(publicKey).filter(pk => publicKeyVerify(Buffer.from(pk)))
-
-export type ValidHost = {
-  hostname: string
-  port: number
-}
-
-/** Confirm a host is semantically valid (e.g. "localhost:8080") */
-const validateHost = (host: string): Maybe<ValidHost> =>
-  Maybe.encase(() => new URL('https://' + host)).map(({ hostname, port }) => ({
-    hostname,
-    port: parseInt(port, 10)
-  }))
-
-// TODO UnvalidatedLndCredentials => ValidLndCredentials
-const convertAndValidate = ({
-  lndHost,
-  identityPublicKey,
-  tlsCert,
-  macaroon
-}: UnvalidatedLndCredentials): Maybe<ValidLndCredentials> => {
-  const host = validateHost(lndHost)
-  if (host.isNothing()) {
-    return Nothing
-  }
-
-  const publicKey = verifyIdentityPublicKey(identityPublicKey)
-  if (publicKey.isNothing()) {
-    return Nothing
-  }
-
-  // TODO This is not correct!
-  const a = Just({
-    ...host.extract(),
-    identityPublicKey: publicKey.extract(),
-    tlsCert: tlsCert.toString('base64'),
-    macaroon: macaroon.toString('base64')
-  })
-
-  return validateLndCredentials(a)
-}
-
-export const validateLndCredentials = (
-  lndCreds: ParsedLndCredentials
-): Promise<Maybe<ValidatedLndCredentials>> =>
-  createLndConnection(lndCreds)
-    .then(service => service.close())
-    .then(() => Just(lndCreds as ValidatedLndCredentials))
-    .catch(() => Nothing)
-
-/**
+/*
  * ------------------------------------
  * SETTLEMENT ENGINE
  * ------------------------------------
  */
 
-// TODO Or maybe there's just a generic settlement engine interface?
-interface LndSettlementEngine extends SettlementEngine {}
-
-export const setupEngine = (): LndSettlementEngine => ({
+export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
+export const setupEngine = (ledgerEnv: LedgerEnv): LndSettlementEngine => ({
   assetCode: 'BTC',
   assetScale: 8,
   baseUnit: satoshi,
@@ -134,45 +54,33 @@ export const setupEngine = (): LndSettlementEngine => ({
     mainnet: {
       'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/btc`
     }
-  }
+  }[ledgerEnv]
 })
 
-// TODO These can likely be generic and then passed into the "createUplink" method
-
-/** Convert the global max-in-flight amount to the local/native/base units of the plugin */
-const getNativeMaxInFlight = ({
-  maxInFlightUsd,
-  rateBackend
-}: ApiUtils): BigNumber => convert(maxInFlightUsd, satoshi(), rateBackend)
-
-const getPluginBalanceConfig = (maxInFlight: BigNumber) => {
-  const maxPrefund = maxInFlight.times(1.1).dp(0, BigNumber.ROUND_CEIL)
-  const maxCredit = maxPrefund
-    .plus(maxInFlight.times(2))
-    .dp(0, BigNumber.ROUND_CEIL)
-
-  return {
-    maximum: maxCredit,
-    settleTo: maxPrefund,
-    settleThreshold: maxPrefund
-  }
-}
-
-const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
-  maxInFlight.times(2).toString()
-
-/**
+/*
  * ------------------------------------
  * CREDENTIAL
  * ------------------------------------
  */
 
-// TODO Add back all credential validation code from btc.ts file!
+/**
+ * Confirm a host is semantically valid (e.g. "localhost:8080")
+ * and split into component hostname and port
+ */
+const splitHost = (host: string): Option<ValidHost> =>
+  tryCatch(() => new URL('https://' + host)).map(({ hostname, port }) => ({
+    hostname,
+    port: parseInt(port, 10)
+  }))
 
-/** LND credentials in internal format to attempt a connection */
-interface ParsedLndCredential {
-  /** Lightning secp256k1 public key */
-  identityPublicKey: string
+export type ValidHost = {
+  hostname: string
+  port: number
+}
+
+// TODO Add method to validate credentials using `setupCredential` then `closeCredential`
+
+export interface ValidatedLndCredential {
   /** Hostname that exposes peering and gRPC server (on different ports) */
   hostname: string
   /** Port for gRPC connections */
@@ -183,118 +91,131 @@ interface ParsedLndCredential {
   macaroon: string
 }
 
-// TODO Should there be two separate hierachies for the instance, and
-// the config that was used to create it?
-export interface ReadyLndCredential extends ParsedLndCredential {
+export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
+
+export interface ReadyLndCredential {
   settlerType: SettlementEngineType.Lnd
-
-  service: LightningService
-  invoiceStream: InvoiceStream
+  /** gRPC client connected to Lighnting node for performing requests */
+  service: LndService
+  /** Bidirectional streaming RPC to send outgoing payments and receive attestations */
   paymentStream: PaymentStream
-  cachedChannelBalance: BigNumber
+  /** Streaming RPC of newly added or settled invoices */
+  invoiceStream: InvoiceStream
+  /** Lightning secp256k1 public key */
+  identityPublicKey: LndIdentityPublicKey
+  /** Streaming updates of balance in channel */
+  channelBalance$: BehaviorSubject<BigNumber>
 }
 
-const throttle = (run: Function, wait: number) => {
-  let timeout: NodeJS.Timeout | null = null
-
-  return () => {
-    timeout =
-      timeout ||
-      setTimeout(() => {
-        timeout = null
-        run()
-      }, wait)
-  }
-}
-
-const fetchChannelBalance = async (lightning: LightningService) => {
+const fetchChannelBalance = async (lightning: LndService) => {
   const res = await lightning.channelBalance(new ChannelBalanceRequest())
   return convert(satoshi(res.getBalance()), btc())
 }
 
+// TODO Is this used outside of "getCredential" ?
+const uniqueId = (cred: ReadyLndCredential) => cred.identityPublicKey
+
+const getCredential = (
+  state: State,
+  credentialId: LndIdentityPublicKey
+): Option<ReadyLndCredential> =>
+  fromNullable(
+    state.credentials.filter(
+      (cred): cred is ReadyLndCredential =>
+        cred.settlerType === SettlementEngineType.Lnd &&
+        uniqueId(cred) === credentialId
+    )[0]
+  )
+
 export const setupCredential = async (
-  opts: ParsedLndCredential
+  opts: ValidatedLndCredential
 ): Promise<ReadyLndCredential> => {
   // Create and connect the internal LND service (passed to plugins)
   const service = connectLnd(opts)
   await waitForReady(service)
 
-  // TODO Refactor to remove ugly mutation -- just use Observable.fromStream or something instead!
-  let cachedChannelBalance = new BigNumber(0)
-  const updateChannelBalance = throttle(async () => {
-    cachedChannelBalance = await fetchChannelBalance(service)
-  }, 100) /** Limit refreshes to 10 per second */
+  // Fetch the public key so the user doesn't have to provide it
+  // (necessary as a unique identifier for this LND node)
+  const response = await service.getInfo(new GetInfoRequest())
+  const identityPublicKey = response.getIdentityPubkey()
 
-  // Fetch an updated channel balance whenever an invoice
-  // is paid or we pay an invoice
   const paymentStream = createPaymentStream(service)
-  paymentStream.on('data', updateChannelBalance)
+  const payments$ = fromEvent<SendResponse>(paymentStream, 'data')
   const invoiceStream = createInvoiceStream(service)
-  invoiceStream.on('data', updateChannelBalance)
+  const invoices$ = fromEvent<Invoice>(invoiceStream, 'data').pipe(
+    // Only refresh when invoices are paid/settled
+    filter(invoice => invoice.getSettled())
+  )
+
+  // Fetch an updated channel balance every 3s, or whenever an invoice is paid (by us or counterparty)
+  const channelBalance$ = new BehaviorSubject(new BigNumber(0))
+  merge(invoices$, payments$, interval(3000))
+    .pipe(
+      // Limit balance requests to 10 per second
+      throttleTime(100),
+      mergeMap(() => from(fetchChannelBalance(service))),
+      // Only emit updated values
+      distinctBigNum()
+    )
+    .subscribe(channelBalance$)
 
   return {
-    ...opts,
+    settlerType: SettlementEngineType.Lnd,
     service,
-    invoiceStream,
     paymentStream,
-    cachedChannelBalance
+    invoiceStream,
+    identityPublicKey,
+    channelBalance$
   }
 }
 
-export const uniqueId = (cred: ParsedLndCredential) => cred.identityPublicKey
+// TODO Also unsubscribe/end all of the event listeners (make sure no memory leaks)
+export const closeCredential = async ({ service }: ReadyLndCredential) =>
+  service.close()
 
-export const closeCredential = async (cred: ReadyLndCredential) =>
-  cred.service.close()
-
-/**
- * === === === === === === === === === === === ===
+/*
+ * ------------------------------------
  * UPLINK
- * === === === === === === === === === === === ===
+ * ------------------------------------
  */
 
-// TODO How should the generic version be named compared to the non- & version?
-export interface LndUplinkConfig {
+export interface LndUplinkConfig extends BaseUplinkConfig {
   settlerType: SettlementEngineType.Lnd
-  credential: ParsedLndCredential // TODO e.g. Rename to "ValidLndConfigCredential"
+  credentialId: LndIdentityPublicKey
 }
 
-// TODO Add comments for these things!
-export interface OnlyLnd {
-  /** Plugin specific to this uplink and type of uplink */
-  plugin: LightningPlugin
-  // credential: ReadyLndCredential // TODO Should this really be a reference?
-  // ^ Or should credential reference the settlement engine itself?
+export interface LndBaseUplink extends BaseUplink {
   settlerType: SettlementEngineType.Lnd
-  // credentialId: string
-  // settler: LndSettlementEngine
+  credentialId: LndIdentityPublicKey
 }
 
-// TODO Maybe this makes more sense?
-// And then the "create/connect" would only build the Lnd-specific part
-export type LndUplink = OnlyLnd & NewUplink
+export type ReadyLndUplink = LndBaseUplink & ReadyUplink
 
-export const connectUplink = (utils: ApiUtils) => (
-  settler: LndSettlementEngine
-) => (credential: ReadyLndCredential) => (
-  config: UplinkConfig & LndUplinkConfig
-): OnlyLnd => {
+export const connectUplink = (state: State) => (
+  credential: ReadyLndCredential
+) => async (config: LndUplinkConfig): Promise<LndBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  const { hostname: lndHost, identityPublicKey: lndIdentityPubkey } = credential
+  const settler = getSettler(state)(SettlementEngineType.Lnd)
 
-  const maxInFlight = getNativeMaxInFlight(utils)
+  const maxInFlight = getNativeMaxInFlight(state, SettlementEngineType.Lnd)
+  const maxPacketAmount = getPluginMaxPacketAmount(maxInFlight)
+  const balance = getPluginBalanceConfig(maxInFlight)
 
   const plugin = new LightningPlugin(
     {
       role: 'client',
       server,
-      lndIdentityPubkey,
-      lndHost,
-      /** Inject the existing LND service, since it may be shared across multiple uplinks */
+      /**
+       * Inject the existing LND service, since it may be shared across multiple uplinks
+       * Share the same payment/invoice stream across multiple plugins
+       */
       lnd: credential.service,
-      maxPacketAmount: getPluginMaxPacketAmount(maxInFlight),
-      balance: getPluginBalanceConfig(maxInFlight)
+      paymentStream: credential.paymentStream,
+      invoiceStream: credential.invoiceStream,
+      maxPacketAmount,
+      balance
     },
     {
       log: createLogger('ilp-plugin-lightning'),
@@ -302,36 +223,65 @@ export const connectUplink = (utils: ApiUtils) => (
     }
   )
 
+  const account = await plugin.loadAccount('peer')
+
+  const outgoingCapacity$ = credential.channelBalance$
+  const incomingCapacity$ = new BehaviorSubject(new BigNumber(Infinity))
+  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
+  const totalSent$ = new BehaviorSubject(new BigNumber(0))
+
+  const availableToDebit$ = new BehaviorSubject(new BigNumber(0))
+  account.payoutAmount$
+    .pipe(
+      // Only emit updated values
+      distinctBigNum(),
+      map(amount => amount.negated()),
+      map(amount => convert(satoshi(amount), btc()))
+    )
+    // TODO Simpler way to do this? Try .subscribe(availableToDebit$) again?
+    .subscribe({
+      next: val => {
+        availableToDebit$.next(val)
+      },
+      complete: () => {
+        availableToDebit$.complete()
+      },
+      error: err => {
+        availableToDebit$.error(err)
+      }
+    })
+
+  const idleAvailableToDebit = convert(
+    settler.baseUnit(balance.settleTo),
+    settler.exchangeUnit()
+  )
+
+  const availableToCredit$ = new BehaviorSubject(new BigNumber(0))
+  account.balance$
+    .pipe(
+      // Only emit updated values
+      distinctBigNum(),
+      map(amount => balance.maximum.minus(amount)),
+      map(amount => convert(satoshi(amount), btc()))
+    )
+    .subscribe(availableToCredit$)
+
+  const idleAvailableToCredit = convert(
+    settler.baseUnit(balance.maximum.minus(balance.settleTo)),
+    settler.exchangeUnit()
+  )
+
   return {
     settlerType: SettlementEngineType.Lnd,
-    plugin
+    credentialId: uniqueId(credential),
+    plugin,
+    outgoingCapacity$,
+    incomingCapacity$,
+    availableToDebit$,
+    idleAvailableToDebit,
+    availableToCredit$,
+    idleAvailableToCredit,
+    totalSent$,
+    totalReceived$
   }
 }
-
-/**
- * Generic utils for lightning
- */
-
-const getAccount = (uplink: LndUplink): Maybe<LightningAccount> =>
-  Maybe.fromNullable(uplink.plugin._accounts.get('server'))
-
-/**
- * Balance-related getters
- */
-
-// TODO Should this just have a generic "GetBalance<UplinkType> => BigNumber" type?
-
-export const availableToSend: AvailableToSend<LndUplink> = uplink =>
-  uplink.cachedChannelBalance // TODO Fix!
-
-export const availableToReceive: AvailableToReceive<LndUplink> = () =>
-  new BigNumber(Infinity)
-
-export const totalReceived: TotalReceived<LndUplink> = () => new BigNumber(0)
-
-export const availableToDebit: AvailableToDebit<LndUplink> = uplink =>
-  getAccount(uplink)
-    .map(({ account }) => convert(satoshi(account.balance), btc()))
-    .orDefault(new BigNumber(0))
-
-// TODO Export all members at the end so it's clear what's exported and what isn't

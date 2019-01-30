@@ -17,13 +17,23 @@ import * as Lnd from './settlement/lnd/lnd'
 import { SimpleStore } from './utils/store'
 import { convert } from '@kava-labs/crypto-rate-utils'
 import { State, Credential, getSettler } from './api'
-import { BehaviorSubject, combineLatest } from 'rxjs'
+import { BehaviorSubject, zip, combineLatest } from 'rxjs'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { generateSecret } from './utils/crypto'
 import { Server as StreamServer } from 'ilp-protocol-stream'
 import { streamMoney } from './services/switch'
-import BtpPlugin from 'ilp-plugin-btp'
-import { map } from 'rxjs/operators'
+import {
+  map,
+  tap,
+  distinctUntilChanged,
+  filter,
+  first,
+  bufferCount,
+  withLatestFrom,
+  mergeMap,
+  take
+} from 'rxjs/operators'
+import createLogger from './utils/log'
 
 export const getSettlerModule = (settlerType: SettlementEngineType) => {
   return Lnd
@@ -79,20 +89,36 @@ export interface BaseUplink {
    */
   readonly outgoingCapacity$: BehaviorSubject<BigNumber>
   /**
-   * Amount of our peer's *money* in layer 2,
+   * Amount of *money* our peer has in layer 2,
    * immediately available for our peer to send to us
    */
   readonly incomingCapacity$: BehaviorSubject<BigNumber>
   /**
-   * Amount of *credit* our peer is indebted to us,
+   * Amount of *credit* our peer *is* indebted to us,
    * immediately available for us to spend from
+   *
+   * - Essentially, the amount prefunded at any moment in time
+   * - Must emit ONLY after `outgoingCapacity$` emits,
+   *   so values derived from the two stay in sync
    */
   readonly availableToDebit$: BehaviorSubject<BigNumber>
   /**
-   * Amount of *credit* we're extending to our peer,
+   * Amount of *credit* our peer *should be* indebted to us
+   * after we've settled up with them (settleTo)
+   */
+  readonly idleAvailableToDebit: BigNumber
+  /**
+   * Amount of *credit* we *are* extending to our peer,
    * immediately available for our peer to spend from
+   *
+   * TODO "our peer to spend from" isn't true/the best description
    */
   readonly availableToCredit$: BehaviorSubject<BigNumber>
+  /**
+   * Amount of *credit* that we *should be* extending to our peer
+   * after they've settled up with us (max balance - settleTo)
+   */
+  readonly idleAvailableToCredit: BigNumber
   /**
    * Amount of *money* we've received in layer 2 that is *unavailble* to send
    * (money that we cannot directly send back to our peer)
@@ -157,7 +183,7 @@ export const connectUplink = (state: State) => (
     totalReceived$
   } = settlerUplink
 
-  // Register a money handler, because, apparently, this is ABSOLUTELY necessary?
+  // Register a money handler, because, apparently otherwise it will error?
   plugin.registerMoneyHandler(() => Promise.resolve())
 
   // Connect the plugin & confirm the upstream connector is using the correct asset
@@ -165,8 +191,8 @@ export const connectUplink = (state: State) => (
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
   // Setup internal packet handlers and routing
-  // TODO Use a BehaviorSubject for this/function that maps to internal handlers? Setup handlers should only be called once!
 
+  // TODO Make sure these handlers are mapped correctly, since they are mutated (yuck!)
   const handlers: {
     streamServerHandler: DataHandler
     streamClientHandler: IlpPrepareHandler
@@ -192,20 +218,36 @@ export const connectUplink = (state: State) => (
     await generateSecret() // TODO Use this from the config
   )
 
+  const log = createLogger(`ilp:test:${credential.identityPublicKey.slice(-5)}`)
+
+  // TODO Better explanation here?
+  // TODO Is this correct? Previously I just used `combineLatest` and `sumAll`
+  // TODO If availableToDebit changes, outgoing capacity ALWAYS changes! (but if outgoing capacity changes -- e.g. deposit -- prefund won't necessarily change)
+  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
+  /**
+   * Since a change in that amount prefunded to the connector also
+   * likely changes the outgoing capacity, use zip
+   */
+  combineLatest(outgoingCapacity$, availableToDebit$)
+    .pipe(
+      tap(vals => {
+        // TODO Temporary! Remove this!
+        log.info(`OUTGOING CAPACITY:  ${vals[0]}`)
+        log.info(`AVAILABLE TO DEBIT: ${vals[1]}`)
+      }),
+      sumAll()
+    )
+    .subscribe(availableToSend$)
+
   // Calculate available balance
   const balance$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingCapacity$, availableToDebit$, totalReceived$)
-    .pipe(map(sumAll))
+  combineLatest(availableToSend$, totalReceived$)
+    .pipe(sumAll())
     .subscribe(balance$)
-
-  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingCapacity$, availableToDebit$)
-    .pipe(map(sumAll))
-    .subscribe(availableToSend$)
 
   const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
   combineLatest(incomingCapacity$, availableToCredit$)
-    .pipe(map(sumAll))
+    .pipe(sumAll())
     .subscribe(availableToReceive$)
 
   return Object.assign(handlers, {
@@ -381,9 +423,13 @@ export const remove = () => 3
  * Transfer amount prefunded to connector back to layer 2
  */
 export const restoreCredit = (state: State) => async (uplink: ReadyUplink) => {
-  // TODO Wait for it to finish settling up?
-  await new Promise(r => setTimeout(r, 2000))
+  // Wait for outgoing settlements to finish/be topped up
+  // TODO Add timeout?
+  await uplink.availableToDebit$
+    .pipe(first(val => val.gte(uplink.idleAvailableToDebit)))
+    .toPromise()
 
+  // TODO What if each uplink exposed a function to turn off/prevent settlements?
   // @ts-ignore
   uplink.plugin._balance.settleThreshold = new BigNumber(-Infinity)
 
@@ -394,8 +440,9 @@ export const restoreCredit = (state: State) => async (uplink: ReadyUplink) => {
     dest: uplink
   })
 
-  // TODO Wait for it to finish settling up?
-  await new Promise(r => setTimeout(r, 2000))
+  // Ensure to credit is remaining on the connector
+  // TODO Add timeout?
+  await uplink.availableToDebit$.pipe(first(val => val.isZero())).toPromise()
 }
 
 /**
@@ -410,6 +457,24 @@ export const disconnect = (uplink: ReadyUplink) => {
   return uplink.plugin.disconnect()
 }
 
-// TODO Move this elsewhere?
-export const sumAll = (values: BigNumber[]) =>
-  values.reduce((a, b) => a.plus(b))
+// TODO Move this elsewhere? (common rxjs operators etc)
+
+export const sumAll = () =>
+  map((values: BigNumber[]) => values.reduce((a, b) => a.plus(b)))
+
+export const distinctBigNum = () =>
+  distinctUntilChanged((prev: BigNumber, cur: BigNumber) => prev.eq(cur))
+
+// TODO Remove these?
+
+// TODO Add timeout/failure case?
+export const readyToDebit = (uplink: ReadyUplink): Promise<BigNumber> =>
+  uplink.availableToDebit$
+    .pipe(first(val => val.gte(uplink.idleAvailableToDebit)))
+    .toPromise()
+
+// TODO Add timeout/failure case?
+export const readyToCredit = (uplink: ReadyUplink): Promise<BigNumber> =>
+  uplink.availableToCredit$
+    .pipe(first(val => val.gte(uplink.idleAvailableToCredit)))
+    .toPromise()
