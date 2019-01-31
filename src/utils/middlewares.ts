@@ -1,5 +1,4 @@
 import BigNumber from 'bignumber.js'
-import EventEmitter from 'eventemitter3'
 import {
   deserializeIlpPrepare,
   deserializeIlpReply,
@@ -10,23 +9,20 @@ import {
 import { DataHandler, Logger, MoneyHandler, Plugin } from '../types/plugin'
 import { MemoryStore } from './store'
 import { defaultDataHandler, defaultMoneyHandler } from './packet'
+import { BehaviorSubject } from 'rxjs'
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
-export interface IWrapperOpts {
+export interface PluginWrapperOpts {
   plugin: Plugin
+  prefundTo?: BigNumber.Value
+  maxBalance?: BigNumber.Value
+  maxPacketAmount?: BigNumber.Value
   log: Logger
   assetCode: string
   assetScale: number
   store?: MemoryStore
-  maxPacketAmount?: BigNumber.Value
-  balance?: {
-    maximum?: BigNumber.Value
-    settleTo?: BigNumber.Value
-    settleThreshold?: BigNumber.Value
-    minimum?: BigNumber.Value
-  }
 }
 
 export class PluginWrapper implements Plugin {
@@ -37,11 +33,52 @@ export class PluginWrapper implements Plugin {
   private dataHandler: DataHandler = defaultDataHandler
   private moneyHandler: MoneyHandler = defaultMoneyHandler
 
-  // Balance
-  private readonly maximum: BigNumber
-  private readonly settleTo: BigNumber
-  private readonly settleThreshold: BigNumber
-  private readonly minimum: BigNumber
+  /**
+   * Amount owed *by us* to our peer for **our packets they've forwarded** (outgoing balance)
+   * - Positive amount indicates we're indebted to the peer and need to pay them for packets they're already forwarded
+   * - Negative amount indicates we've prefunded the peer and have as much credit available to spend
+   *
+   * TRIGGERS:
+   * - Outgoing settlements to peer **decrease** the amount we owe to them
+   * - Outgoing PREPARE packets to the peer **increase** the amount we owe to them,
+   *   but only *after* we receive a FULFILL packet
+   *
+   * EFFECTS:
+   * - Determines when outgoing settlements to peer occur and for how much
+   */
+  readonly payableBalance$: BehaviorSubject<BigNumber>
+  /**
+   * Positive amount to prefund, which decreases the payable/outgoing balance
+   * - If peer is not extending us very little/no credit, we can still send
+   *   packets by prefunding
+   */
+  private readonly prefundTo: BigNumber
+  /**
+   * Should any outgoing settlements be triggered?
+   * - If settlement is disabled, balances will still be correctly accounted for
+   *   so settlements can proceed if it's later re-enabled
+   */
+  isSettlementEnabled = true
+
+  /**
+   * Amount owed *to us* by our peer for **their packets we've forwarded** (incoming balance)
+   * - Positive amount indicates our peer is indebted to us for packets we've already forwarded
+   * - Negative amount indicates our peer has prefunded us and has as much credit available to spend
+   *
+   * TRIGGERS:
+   * - Incoming settlements from the peer **decrease** the amount they owe to us
+   * - Incoming PREPARE packets from the peer immediately **increase** the amount they owe to us,
+   *   unless we respond with a REJECT (e.g. we decline to forward it, or it's rejected upstream).
+   *
+   * EFFECTS:
+   * - Determines if an incoming ILP PREPARE is forwarded/cleared
+   */
+  readonly receivableBalance$: BehaviorSubject<BigNumber>
+  /**
+   * Positive maximum amount of packets we'll forward on credit before the peer must settle up
+   * - Since it's credit extended, if the peer went offline/disappeared, we'd still be owed the money
+   */
+  private readonly maxBalance: BigNumber
 
   // Max packet amount
   private readonly maxPacketAmount: BigNumber
@@ -54,72 +91,50 @@ export class PluginWrapper implements Plugin {
 
   constructor({
     plugin,
-    balance: {
-      maximum = Infinity,
-      settleTo = 0,
-      settleThreshold = -Infinity,
-      minimum = -Infinity
-    } = {},
+    prefundTo = 0,
+    maxBalance = Infinity,
     maxPacketAmount = Infinity,
     log,
     store,
     assetCode,
     assetScale
-  }: IWrapperOpts) {
+  }: PluginWrapperOpts) {
+    this.plugin = plugin
+    this.plugin.registerDataHandler(data => this.handleData(data))
+    this.plugin.registerMoneyHandler(amount => this.handleMoney(amount))
+
     this.store = store || new MemoryStore()
     this.log = log
     this.assetCode = assetCode
     this.assetScale = assetScale
 
-    this.maximum = new BigNumber(maximum).dp(0, BigNumber.ROUND_FLOOR)
-    this.settleTo = new BigNumber(settleTo).dp(0, BigNumber.ROUND_FLOOR)
-    this.settleThreshold = new BigNumber(settleThreshold).dp(
-      0,
-      BigNumber.ROUND_FLOOR
+    /** Payable balance (outgoing/settlement) */
+    this.prefundTo = new BigNumber(prefundTo).dp(0, BigNumber.ROUND_FLOOR)
+    this.payableBalance$ = new BehaviorSubject(
+      new BigNumber(this.store.getSync('payableBalance') || 0)
     )
-    this.minimum = new BigNumber(minimum).dp(0, BigNumber.ROUND_CEIL)
+    this.payableBalance$.subscribe(amount =>
+      this.store.putSync('payableBalance', amount.toString())
+    )
 
-    // Validate balance configuration: max >= settleTo >= settleThreshold >= min
-    if (!this.maximum.gte(this.settleTo)) {
-      throw new Error(
-        'Invalid balance configuration: maximum balance must be greater than or equal to settleTo'
-      )
-    }
-    if (!this.settleTo.gte(this.settleThreshold)) {
-      throw new Error(
-        'Invalid balance configuration: settleTo must be greater than or equal to settleThreshold'
-      )
-    }
-    if (!this.settleThreshold.gte(this.minimum)) {
-      throw new Error(
-        'Invalid balance configuration: settleThreshold must be greater than or equal to minimum balance'
-      )
-    }
+    /** Receivable balance (incoming/clearing) */
+    this.maxBalance = new BigNumber(maxBalance).dp(0, BigNumber.ROUND_FLOOR)
+    this.receivableBalance$ = new BehaviorSubject(
+      new BigNumber(this.store.getSync('receivableBalance') || 0)
+    )
+    this.receivableBalance$.subscribe(amount =>
+      this.store.putSync('receivableBalance', amount.toString())
+    )
 
+    /** Max packet amount */
     this.maxPacketAmount = new BigNumber(maxPacketAmount)
       .abs()
       .dp(0, BigNumber.ROUND_FLOOR)
-
-    this.plugin = plugin
-
-    this.plugin.registerDataHandler(data => this.handleData(data))
-    this.plugin.registerMoneyHandler(amount => this.handleMoney(amount))
   }
 
-  async connect(opts?: object) {
-    await this.plugin.connect(opts)
-    return this.attemptSettle().catch(err =>
-      this.log.error(`Failed to settle: ${err.message}`)
-    )
-  }
-
-  disconnect() {
-    return this.plugin.disconnect()
-  }
-
-  isConnected() {
-    return this.plugin.isConnected()
-  }
+  /*
+   * Outgoing packets/settlements (payable balance)
+   */
 
   async sendData(data: Buffer): Promise<Buffer> {
     const next = () => this.plugin.sendData(data)
@@ -133,31 +148,150 @@ export class PluginWrapper implements Plugin {
     const reply = deserializeIlpReply(response)
 
     if (isFulfill(reply)) {
-      try {
-        this.subBalance(amount)
-        // If the balance change succeeds, also update payout amount
-        this.payoutAmount = this.payoutAmount.plus(amount)
-      } catch (err) {
-        this.log.trace(`Failed to fulfill response to PREPARE: ${err.message}`)
-        return serializeIlpReject({
-          code: 'F00',
-          message: 'Insufficient funds',
-          triggeredBy: '',
-          data: Buffer.alloc(0)
-        })
-      }
+      this.log.debug(
+        `Received FULFILL in response to forwarded PREPARE: credited ${this.format(
+          amount
+        )}`
+      )
+      this.payableBalance$.next(this.payableBalance$.value.plus(amount))
     }
 
-    // Attempt to settle on fulfills and* T04s (to resolve stalemates)
+    // Attempt to settle on fulfills *and* T04s (to resolve stalemates)
     const shouldSettle =
       isFulfill(reply) || (isReject(reply) && reply.code === 'T04')
     if (shouldSettle) {
-      this.attemptSettle().catch(err =>
-        this.log.error(`Failed to settle: ${err.message}`)
-      )
+      this.tryToSettle()
     }
 
     return response
+  }
+
+  private tryToSettle() {
+    if (!this.isSettlementEnabled) {
+      return
+    }
+
+    const budget = this.prefundTo.plus(this.payableBalance$.value)
+    if (budget.lte(0)) {
+      return
+    }
+
+    this.log.info(`Settlement triggered for ${this.format(budget)}`)
+    this.payableBalance$.next(this.payableBalance$.value.minus(budget))
+
+    this.plugin
+      .sendMoney(budget.toString())
+      .catch(err => this.log.error(`Error during settlement: ${err.message}`))
+  }
+
+  /** Enable outgiong settlements to the peer */
+  enableSettlement() {
+    this.isSettlementEnabled = true
+  }
+
+  /** Disable/prevent any subsequent outgoing settlements to peer from occuring */
+  disableSettlement() {
+    this.isSettlementEnabled = false
+  }
+
+  /*
+   * Incoming packets/settlements (receivable balance)
+   */
+
+  private handleMoney(amount: string) {
+    const next = () => this.moneyHandler(amount)
+
+    if (new BigNumber(amount).isZero()) {
+      return next()
+    }
+
+    const newBalance = this.receivableBalance$.value.minus(amount)
+    this.log.debug(
+      `Received incoming settlement: credited ${this.format(
+        amount
+      )}, new balance is ${this.format(newBalance)}`
+    )
+    this.receivableBalance$.next(newBalance)
+
+    return next()
+  }
+
+  private async handleData(data: Buffer): Promise<Buffer> {
+    const next = () => this.dataHandler(data)
+
+    // Ignore 0 amount packets (no middlewares apply)
+    const { amount } = deserializeIlpPrepare(data)
+    if (amount === '0') {
+      return next()
+    }
+
+    const packetTooLarge = new BigNumber(amount).gt(this.maxPacketAmount)
+    if (packetTooLarge) {
+      return serializeIlpReject({
+        code: 'F08',
+        triggeredBy: '',
+        message: 'Packet size is too large.',
+        data: Buffer.from(
+          JSON.stringify({
+            receivedAmount: amount,
+            maximumAmount: this.maxPacketAmount.toString()
+          })
+        )
+      })
+    }
+
+    const newBalance = this.receivableBalance$.value.plus(amount)
+    if (newBalance.gt(this.maxBalance)) {
+      this.log.debug(
+        `Cannot forward PREPARE: cannot debit ${this.format(
+          amount
+        )}: proposed balance of ${this.format(
+          newBalance
+        )} exceeds maximum of ${this.format(this.maxBalance)}`
+      )
+      return serializeIlpReject({
+        code: 'T04',
+        message: 'Exceeded maximum balance',
+        triggeredBy: '',
+        data: Buffer.alloc(0)
+      })
+    }
+
+    this.log.debug(
+      `Forwarding PREPARE: Debited ${this.format(
+        amount
+      )}, new balance is ${this.format(newBalance)}`
+    )
+    this.receivableBalance$.next(newBalance)
+
+    const response = await next()
+    const reply = deserializeIlpReply(response)
+
+    if (isReject(reply)) {
+      this.log.debug(`Credited ${this.format(amount)} in response to REJECT`)
+      this.receivableBalance$.next(this.receivableBalance$.value.minus(amount))
+    } else {
+      this.tryToSettle()
+    }
+
+    return response
+  }
+
+  /*
+   * Plugin wrapper
+   */
+
+  async connect(opts?: object) {
+    await this.plugin.connect(opts)
+    this.tryToSettle() // TODO Should this be await-ed?
+  }
+
+  disconnect() {
+    return this.plugin.disconnect()
+  }
+
+  isConnected() {
+    return this.plugin.isConnected()
   }
 
   async sendMoney() {
@@ -190,161 +324,7 @@ export class PluginWrapper implements Plugin {
     this.moneyHandler = defaultMoneyHandler
   }
 
-  private async handleData(data: Buffer): Promise<Buffer> {
-    const next = () => this.dataHandler(data)
-
-    // Ignore 0 amount packets
-    const { amount } = deserializeIlpPrepare(data)
-    if (amount === '0') {
-      return next()
-    }
-
-    if (new BigNumber(amount).gt(this.maxPacketAmount)) {
-      return serializeIlpReject({
-        code: 'F08',
-        triggeredBy: '',
-        message: 'Packet size is too large.',
-        data: Buffer.from(
-          JSON.stringify({
-            receivedAmount: amount,
-            maximumAmount: this.maxPacketAmount.toString()
-          })
-        )
-      })
-    }
-
-    try {
-      this.addBalance(amount)
-    } catch (err) {
-      this.log.trace(err.message)
-      return serializeIlpReject({
-        code: 'T04',
-        message: 'Exceeded maximum balance',
-        triggeredBy: '',
-        data: Buffer.alloc(0)
-      })
-    }
-
-    const response = await next()
-    const reply = deserializeIlpReply(response)
-    if (isReject(reply)) {
-      // Allow this to throw if balance drops below minimum
-      this.subBalance(amount)
-    } else {
-      this.attemptSettle().catch(err =>
-        this.log.error(`Failed to settle: ${err.message}`)
-      )
-    }
-
-    return response
-  }
-
-  private handleMoney(amount: string) {
-    const next = () => this.moneyHandler(amount)
-
-    // Allow this to throw if balance drops below minimum
-    this.subBalance(amount)
-    return next()
-  }
-
-  private async attemptSettle(): Promise<void> {
-    // Don't attempt settlement if there's no configured settle threshold ("receive only" mode)
-    const shouldSettle = this.settleThreshold.gt(this.balance)
-    if (!shouldSettle) {
-      return
-    }
-
-    // The amount to settle should be limited by the total packets we've fulfilled
-    let amount = this.settleTo.plus(this.payoutAmount)
-    if (amount.lte(0)) {
-      return
-    }
-
-    try {
-      this.addBalance(amount)
-      this.payoutAmount = this.payoutAmount.minus(amount)
-    } catch (err) {
-      // This should never happen, since the constructor verifies maximum >= settleTo
-      return this.log.error(
-        `Critical settlement error: incorrectly exceeded max balance`
-      )
-    }
-
-    this.log.info(`Settlement triggered for ${this.format(amount)}`)
-
-    try {
-      return this.plugin.sendMoney(amount.toString())
-    } catch (err) {
-      this.log.error(`Error during settlement: ${err.message}`)
-    }
-  }
-
-  /*
-   * Load initial balances from the store
-   * Automatically save balance updates to the store
-   */
-
-  get balance() {
-    return new BigNumber(this.store.getSync('balance') || 0)
-  }
-
-  set balance(amount: BigNumber) {
-    this.store.putSync('balance', amount.toString())
-  }
-
-  get payoutAmount() {
-    return new BigNumber(this.store.getSync('payoutAmount') || 0)
-  }
-
-  set payoutAmount(amount: BigNumber) {
-    this.store.putSync('payoutAmount', amount.toString())
-  }
-
-  private addBalance(amount: BigNumber.Value) {
-    if (new BigNumber(amount).isZero()) {
-      return
-    }
-
-    const newBalance = this.balance.plus(amount)
-    if (newBalance.gt(this.maximum)) {
-      throw new Error(
-        `Cannot debit ${this.format(amount)}: proposed balance of ${this.format(
-          newBalance
-        )} exceeds maximum of ${this.format(this.maximum)}`
-      )
-    }
-
-    this.log.trace(
-      `Debited ${this.format(amount)}: new balance is ${this.format(
-        newBalance
-      )}`
-    )
-    this.balance = newBalance
-  }
-
-  private subBalance(amount: BigNumber.Value) {
-    if (new BigNumber(amount).isZero()) {
-      return
-    }
-
-    const newBalance = this.balance.minus(amount)
-    if (newBalance.lt(this.minimum)) {
-      throw new Error(
-        `Cannot credit ${this.format(
-          amount
-        )}: proposed balance of ${this.format(
-          newBalance
-        )} is below minimum of ${this.format(this.minimum)}`
-      )
-    }
-
-    this.log.trace(
-      `Credited ${this.format(amount)}: new balance is ${this.format(
-        newBalance
-      )}`
-    )
-    this.balance = newBalance
-  }
+  /* Utils */
 
   private format(amount: BigNumber.Value) {
     return `${new BigNumber(amount).shiftedBy(
