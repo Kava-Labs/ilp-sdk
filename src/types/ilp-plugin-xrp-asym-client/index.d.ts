@@ -24,16 +24,16 @@ declare module 'ilp-plugin-xrp-asym-client' {
     /** XRP secret */
     secret: string
     /** Orders of magnitude between base unit of plugin and XRP */
-    currencyScale: number
+    currencyScale?: number
     /** WebSocket URI of the Rippled server to connect to */
-    xrpServer: string
+    xrpServer?: string
     /**
      * Amount to fund new outgoing channels, in units of XRP,
      * and the default for depositing to channels
      */
-    outgoingChannelAmountXRP: string
+    outgoingChannelAmountXRP?: string
     /** Should channels automatically be created and topped up? */
-    autoFundChannels: boolean
+    autoFundChannels?: boolean
   }
 
   export interface XrpAsymClientServices
@@ -68,11 +68,11 @@ declare module 'ilp-plugin-xrp-asym-client' {
 
     /* Incoming channel */
 
-    /** Cached details from the incoming payment channel */
-    _paychan?: PaymentChannel
     /** Incoming payment channel claim signature */
     _bestClaim?: PaymentChannelClaim
     /** Incoming channel id (256 bit hex) */
     _clientChannel?: string
+    /** Cached details from the incoming payment channel */
+    _paychan?: PaymentChannel
   }
 }
