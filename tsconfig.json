@@ -11,7 +11,7 @@
     "esModuleInterop": true,
 
     "strict": true /* Enable all strict type-checking options. */,
-    "strictFunctionTypes": false, // TODO Should I disable
+    // "strictFunctionTypes": false, // TODO Should I disable
 
     "resolveJsonModule": true /* Required by Ethereum plugin for loading ABIs. */,
 
@@ -28,7 +28,11 @@
     // }
     "typeRoots": ["node_modules/@types", "src/types"],
     "paths": {
-      "ilp-plugin-xrp-asym-client": ["./types/ilp-plugin-xrp-asym-client"]
+      "ilp-plugin-xrp-asym-client": ["./types/ilp-plugin-xrp-asym-client"],
+      "ilp-plugin-xrp-paychan-shared": [
+        "./types/ilp-plugin-xrp-paychan-shared"
+      ],
+      "ripple-keypairs": ["./types/ripple-keypairs"]
     }
   }
 }

@@ -10,43 +10,32 @@ import {
 import { Plugin, DataHandler, IlpPrepareHandler } from './types/plugin'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import BigNumber from 'bignumber.js'
-import { SettlementEngineType, SettlementEngine } from 'settlement'
+import { SettlementEngineType, SettlementEngine } from './settlement'
 import * as Lnd from './settlement/lnd/lnd'
 // import * as Machinomy from 'settlement/machinomy/machinomy'
-// import * as XrpPaychan from 'settlement/xrp-paychan/xrp-paychan'
+import * as XrpPaychan from './settlement/xrp-paychan/xrp-paychan'
 import { SimpleStore } from './utils/store'
 import { convert } from '@kava-labs/crypto-rate-utils'
-import { State, Credential, getSettler } from './api'
+import { State, getSettler } from './api'
 import { BehaviorSubject, zip, combineLatest } from 'rxjs'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { generateSecret } from './utils/crypto'
 import { Server as StreamServer } from 'ilp-protocol-stream'
 import { streamMoney } from './services/switch'
-import {
-  map,
-  tap,
-  distinctUntilChanged,
-  filter,
-  first,
-  bufferCount,
-  withLatestFrom,
-  mergeMap,
-  take
-} from 'rxjs/operators'
+import { map, tap, distinctUntilChanged, first } from 'rxjs/operators'
 import createLogger from './utils/log'
 
 export const getSettlerModule = (settlerType: SettlementEngineType) => {
-  return Lnd
-
+  // return Lnd
   // TODO Add this back (to support everything)!
-  // switch (settlerType) {
-  //   case SettlementEngineType.Lnd:
-  //     return Lnd
-  //   case SettlementEngineType.Machinomy:
-  //     return Machinomy
-  //   case SettlementEngineType.XrpPaychan:
-  //     return XrpPaychan
-  // }
+  switch (settlerType) {
+    case SettlementEngineType.Lnd:
+      return Lnd
+    // case SettlementEngineType.Machinomy:
+    //   return Machinomy
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan
+  }
 }
 
 /**
@@ -98,8 +87,6 @@ export interface BaseUplink {
    * immediately available for us to spend from
    *
    * - Essentially, the amount prefunded at any moment in time
-   * - Must emit ONLY after `outgoingCapacity$` emits,
-   *   so values derived from the two stay in sync
    */
   readonly availableToDebit$: BehaviorSubject<BigNumber>
   /**
@@ -132,17 +119,17 @@ export interface BaseUplink {
 }
 
 // TODO For testing purposes.
-interface BaseMachinomyUplink extends BaseUplink {
-  foo: 'bar'
-}
-interface BaseXrpPaychanUplink extends BaseUplink {
-  bar: 'baz'
-}
+// interface BaseMachinomyUplink extends BaseUplink {
+//   foo: 'bar'
+// }
+// interface BaseXrpPaychanUplink extends BaseUplink {
+//   bar: 'baz'
+// }
 
 export type ReadyUplink = (
   | Lnd.LndBaseUplink
-  | BaseMachinomyUplink
-  | BaseXrpPaychanUplink) & {
+  // | BaseMachinomyUplink
+  | XrpPaychan.XrpPaychanBaseUplink) & {
   /** Handle incoming packets from the endpoint sending money or trading */
   streamClientHandler: IlpPrepareHandler
   /** Handle incoming packets from the endpoint receiving money from other parties */
@@ -165,14 +152,16 @@ export type ReadyUplink = (
   readonly streamServer: StreamServer
 }
 
-export const connectUplink = (state: State) => (
-  credential: Lnd.ReadyLndCredential
-) => async (config: UplinkConfig): Promise<ReadyUplink> => {
+// TODO ALOT needs to be fixed here!
+export const connectUplink = (state: State) => (credential: any) => async (
+  config: any
+): Promise<ReadyUplink> => {
   // TODO Fix this code to make it more agnostic!
-  const settler = Lnd.setupEngine(state.ledgerEnv) // TODO !
-  const settlerUplink = await getSettlerModule(
-    credential.settlerType
-  ).connectUplink(state)(credential)(config as Lnd.LndUplinkConfig)
+  const settler = getSettler(state)(credential.settlerType)! // TODO !
+  const module = getSettlerModule(credential.settlerType)
+
+  // @ts-ignore TODO
+  const settlerUplink = await module.connectUplink(state)(credential)(config)
 
   const {
     plugin,
@@ -218,7 +207,7 @@ export const connectUplink = (state: State) => (
     await generateSecret() // TODO Use this from the config
   )
 
-  const log = createLogger(`ilp:test:${credential.identityPublicKey.slice(-5)}`)
+  const log = createLogger(`ilp:test`)
 
   // TODO Better explanation here?
   // TODO Is this correct? Previously I just used `combineLatest` and `sumAll`
@@ -358,10 +347,14 @@ export const getNativeMaxInFlight = (
   settlerType: SettlementEngineType
 ): BigNumber => {
   const { maxInFlightUsd, rateBackend } = state
-  const { baseUnit } = getSettler(state)(settlerType)
-  return convert(maxInFlightUsd, baseUnit(), rateBackend)
+  const { baseUnit } = getSettler(state)(settlerType)! // TODO !
+  return convert(maxInFlightUsd, baseUnit(), rateBackend).dp(
+    0,
+    BigNumber.ROUND_DOWN
+  )
 }
 
+// TODO Can I elimiante this?
 export const getPluginBalanceConfig = (maxInFlight: BigNumber) => {
   const maxPrefund = maxInFlight.dp(0, BigNumber.ROUND_CEIL)
   const maxCredit = maxPrefund
@@ -375,6 +368,7 @@ export const getPluginBalanceConfig = (maxInFlight: BigNumber) => {
   }
 }
 
+// TODO Can I eliminate this?
 export const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
   maxInFlight.times(2).toString()
 
@@ -384,23 +378,19 @@ export const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
  * ------------------------------------
  */
 
-export type AuthorizeDeposit = (
-  params: {
-    /** Total amount that will move from layer 1 to layer 2, in units of exchange */
-    value: BigNumber
-    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-    fee: BigNumber
-  }
-) => Promise<boolean>
+export type AuthorizeDeposit = (params: {
+  /** Total amount that will move from layer 1 to layer 2, in units of exchange */
+  value: BigNumber
+  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+  fee: BigNumber
+}) => Promise<boolean>
 
-export type AuthorizeWithdrawal = (
-  params: {
-    /** Total amount that will move from layer 2 to layer 1, in units of exchange */
-    value: BigNumber
-    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-    fee: BigNumber
-  }
-) => Promise<boolean>
+export type AuthorizeWithdrawal = (params: {
+  /** Total amount that will move from layer 2 to layer 1, in units of exchange */
+  value: BigNumber
+  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+  fee: BigNumber
+}) => Promise<boolean>
 
 /**
  * ------------------------------------

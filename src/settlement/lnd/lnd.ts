@@ -40,6 +40,8 @@ import { Flavor } from '../../types/util'
 
 export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
 export const setupEngine = (ledgerEnv: LedgerEnv): LndSettlementEngine => ({
+  settlerType: SettlementEngineType.Lnd, // TODO
+
   assetCode: 'BTC',
   assetScale: 8,
   baseUnit: satoshi,
@@ -81,6 +83,8 @@ export type ValidHost = {
 // TODO Add method to validate credentials using `setupCredential` then `closeCredential`
 
 export interface ValidatedLndCredential {
+  settlerType: SettlementEngineType.Lnd // TODO!
+
   /** Hostname that exposes peering and gRPC server (on different ports) */
   hostname: string
   /** Port for gRPC connections */
@@ -95,6 +99,7 @@ export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
 
 export interface ReadyLndCredential {
   settlerType: SettlementEngineType.Lnd
+
   /** gRPC client connected to Lighnting node for performing requests */
   service: LndService
   /** Bidirectional streaming RPC to send outgoing payments and receive attestations */
@@ -113,7 +118,8 @@ const fetchChannelBalance = async (lightning: LndService) => {
 }
 
 // TODO Is this used outside of "getCredential" ?
-const uniqueId = (cred: ReadyLndCredential) => cred.identityPublicKey
+export const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
+  cred.identityPublicKey
 
 const getCredential = (
   state: State,
@@ -127,8 +133,8 @@ const getCredential = (
     )[0]
   )
 
-export const setupCredential = async (
-  opts: ValidatedLndCredential
+export const setupCredential = (opts: ValidatedLndCredential) => async (
+  state: State
 ): Promise<ReadyLndCredential> => {
   // Create and connect the internal LND service (passed to plugins)
   const service = connectLnd(opts)
@@ -197,7 +203,7 @@ export const connectUplink = (state: State) => (
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  const settler = getSettler(state)(SettlementEngineType.Lnd)
+  const settler = getSettler(state)(SettlementEngineType.Lnd)! // TODO "getSettler" should automatically create the uplink
 
   const maxInFlight = getNativeMaxInFlight(state, SettlementEngineType.Lnd)
   const maxPacketAmount = getPluginMaxPacketAmount(maxInFlight)

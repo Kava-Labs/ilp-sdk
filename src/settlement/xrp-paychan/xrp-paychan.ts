@@ -1,12 +1,4 @@
-import {
-  convert,
-  usd,
-  xrp,
-  drop,
-  xrpBase,
-  satoshi,
-  btc
-} from '@kava-labs/crypto-rate-utils'
+import { convert, usd, xrp, drop, xrpBase } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import XrpAsymClient, {
   PaymentChannelClaim,
@@ -14,32 +6,39 @@ import XrpAsymClient, {
 } from 'ilp-plugin-xrp-asym-client'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
-import { SimpleStore, MemoryStore, PluginStore } from 'utils/store'
+import { MemoryStore } from '../../utils/store'
 import createLogger from '../../utils/log'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { PluginWrapper } from '../../utils/middlewares'
-import { SettlementEngine, SettlementEngineType } from 'settlement'
-import { ApiUtils, LedgerEnv, State, getCredential, getSettler } from 'api'
-import { Maybe, Just, Nothing } from 'purify-ts/adts/Maybe'
+import { SettlementEngine, SettlementEngineType } from '../'
+import { LedgerEnv, State } from '../../api'
 import {
-  NewUplink,
   UplinkConfig,
-  getPluginMaxPacketAmount,
-  getPluginBalanceConfig,
+  // getPluginMaxPacketAmount,
+  // getPluginBalanceConfig,
   getNativeMaxInFlight,
   AuthorizeDeposit,
   AuthorizeWithdrawal,
-  interledgerBalance
-} from 'uplink'
-import { FormattedGetAccountInfoResponse } from 'ripple-lib/dist/npm/ledger/accountinfo'
-// import { observe } from 'rxjs-observe'
-import { Observable, BehaviorSubject, Subscriber } from 'rxjs'
+  BaseUplinkConfig,
+  BaseUplink,
+  ReadyUplink,
+  distinctBigNum
+} from '../../uplink'
+import { Observable, BehaviorSubject, Subject, pipe } from 'rxjs'
+import { Flavor } from 'types/util'
+import { map, filter } from 'rxjs/operators'
 
 /**
  * ------------------------------------
  * SETTLEMENT ENGINE
  * ------------------------------------
  */
+
+/** TODO  */
+// const settlerType = SettlementEngineType.XrpPaychan
+
+const getSettler = (state: State) =>
+  state.settlers[SettlementEngineType.XrpPaychan]! // TODO Yuck!
 
 export interface XrpPaychanSettlementEngine extends SettlementEngine {
   api: RippleAPI
@@ -50,21 +49,21 @@ const getXrpServer = (ledgerEnv: LedgerEnv): string =>
     ? 'wss://s1.ripple.com'
     : 'wss://s.altnet.rippletest.net:51233'
 
-export const startEngine = async (
-  utils: ApiUtils
+export const setupEngine = async (
+  ledgerEnv: LedgerEnv
 ): Promise<XrpPaychanSettlementEngine> => {
-  const xrpServer = getXrpServer(utils.ledgerEnv)
   const api = new RippleAPI({
-    server: xrpServer
+    server: getXrpServer(ledgerEnv)
   })
   await api.connect()
 
   return {
+    settlerType: SettlementEngineType.XrpPaychan, // TODO!
+
     assetCode: 'XRP',
     assetScale: 9,
-    baseUnit: satoshi,
-    exchangeUnit: btc,
-    // TODO I should create a generic "ILSP name" mapping/enum
+    baseUnit: xrpBase,
+    exchangeUnit: xrp,
     remoteConnectors: {
       local: {
         'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7443`
@@ -76,7 +75,7 @@ export const startEngine = async (
       mainnet: {
         'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/xrp`
       }
-    },
+    }[ledgerEnv],
     api
   }
 }
@@ -88,38 +87,44 @@ export const startEngine = async (
  */
 
 // TODO Use Ripple API `isValidSecret` and `deriveKeypair` rather than ripple-keypairs! (for types!)
+// (might still require me to add types... because it's bad)
 
 /** Used to ensure XRP credentials can only be validated right here */
-type Brand<K, T> = K & { __brand: T }
-type ValidatedXrpSecret = Brand<string, 'ValidXrpSecret'>
-
-// TODO Fix this validation (just make sure it's a valid Xrp account)
-export const validate = (settler: XrpPaychanSettlementEngine) => async (
-  secret: string
-): Promise<Maybe<ValidatedXrpSecret>> =>
-  /* ripple-lib validates the secret by wrapping deriveKeypair in a try-catch */
-  Maybe.encase(() => deriveAddress(deriveKeypair(secret).publicKey))
-    .map(async address =>
-      Maybe.encase<FormattedGetAccountInfoResponse>(
-        await settler.api.getAccountInfo(address)
-      )
-    )
-    .map(() => secret as ValidatedXrpSecret)
-    .orDefault(Promise.reject)
+export type ValidatedXrpSecret = Flavor<
+  {
+    settlerType: SettlementEngineType.XrpPaychan
+    secret: string // TODO This should be "XrpSecret", the object should be "Credential"
+  },
+  'ValidatedXrpSecret'
+>
+export type ValidatedXrpAddress = Flavor<string, 'ValidatedXrpAddress'>
 
 export interface ReadyXrpCredential {
   settlerType: SettlementEngineType.XrpPaychan
-
+  /** TODO Add explantion */
   secret: string
-  address: string
+  /** TODO Add explanation */
+  address: ValidatedXrpAddress
 }
 
-export const setupCredential = (
-  secret: ValidatedXrpSecret
-): ReadyXrpCredential => ({
-  secret,
-  address: deriveAddress(deriveKeypair(secret).publicKey)
-})
+export const setupCredential = (cred: ValidatedXrpSecret) => async (
+  state: State
+): Promise<ReadyXrpCredential> => {
+  /* ripple-lib validates the secret by wrapping deriveKeypair in a try-catch */
+  const address = deriveAddress(deriveKeypair(cred.secret).publicKey)
+  const settler = getSettler(state)
+  await settler.api.getAccountInfo(address)
+  return {
+    ...cred,
+    address
+  }
+}
+
+// TODO Is this used outside of "getCredential" ?
+export const uniqueId = (cred: ReadyXrpCredential): ValidatedXrpAddress =>
+  cred.address
+
+export const closeCredential = () => Promise.resolve()
 
 /**
  * ------------------------------------
@@ -127,41 +132,38 @@ export const setupCredential = (
  * ------------------------------------
  */
 
-export interface XrpPaychanUplinkConfig {
+export interface XrpPaychanUplinkConfig extends BaseUplinkConfig {
   settlerType: SettlementEngineType.XrpPaychan
-
-  credentialId: string
+  credentialId: ValidatedXrpAddress
 }
 
-export interface OnlyXrpPaychan {
+export interface XrpPaychanBaseUplink extends BaseUplink {
+  settlerType: SettlementEngineType.XrpPaychan
+  credentialId: ValidatedXrpAddress
   plugin: PluginWrapper
   xrpPlugin: XrpAsymClient
-  settlerType: SettlementEngineType.XrpPaychan
 }
 
-export type XrpPaychanUplink = OnlyXrpPaychan & NewUplink
+export type ReadyXrpPaychanUplink = XrpPaychanBaseUplink & ReadyUplink
 
-/* prettier-ignore */
-export type ConnectXrpPaychanUplink =
-  (state: State) =>
-  (config: UplinkConfig & XrpPaychanUplinkConfig) =>
-  OnlyXrpPaychan
-
-// TODO My custom opening channel thing may screw up the entire flow...
-
-export const connectUplink: ConnectXrpPaychanUplink = state => config => {
+export const connectUplink = (state: State) => (
+  credential: ReadyXrpCredential
+) => async (config: XrpPaychanUplinkConfig): Promise<XrpPaychanBaseUplink> => {
   const server = config.plugin.btp.serverUri
-  const store = new MemoryStore(config.plugin.store)
+  const store = config.plugin.store
 
-  const settler = getSettler(state)(config.settlerType) // TODO This is kinda duplicated...
-  const { secret } = getCredential(state, settler, config.credentialId) // TODO Lookup by credentialId is important!
-  const xrpServer = getXrpServer(utils.ledgerEnv)
+  const settler = getSettler(state)
 
-  // TODO Is there a way to create a new channel that's *not* for $10?
+  const { secret } = credential
+  const xrpServer = getXrpServer(state.ledgerEnv)
+
+  // TODO Should there be a way to create a new channel that's *not* for $10?
+  // TODO xrp-asym-server default min incoming is 10 XRP, so it'd be good for that to be a floor
+  //      (if we're allowing the user to manually enter it, there'd also need to be a floor)
   const outgoingChannelAmountXRP = convert(
     usd(10),
     xrp(),
-    utils.rateBackend
+    state.rateBackend
   ).toString()
 
   const plugin = new XrpAsymClient(
@@ -170,203 +172,218 @@ export const connectUplink: ConnectXrpPaychanUplink = state => config => {
       currencyScale: 9,
       secret,
       xrpServer,
-      outgoingChannelAmountXRP,
-      autoFundChannels: false
+      outgoingChannelAmountXRP
+      // autoFundChannels: false // TODO !
     },
     {
       log: createLogger('ilp-plugin-xrp-asym-client'),
-      store
+      store: new MemoryStore(store)
     }
   )
 
-  // TODO TODO TODO
+  /** Stream of updated properties on the underlying plugin */
+  const plugin$ = new Subject<{
+    key: keyof XrpAsymClient
+    val: any
+  }>()
 
-  /** Use a BehaviorSubject so new subscribers are notified of the most recent value */
-  const subject = new BehaviorSubject(new BigNumber(0))
+  /** Trap all property updates on the plugin to emit them on observable */
+  const pluginProxy = new Proxy(plugin, {
+    set: (target, key: keyof XrpAsymClient, val) => {
+      plugin$.next({
+        key,
+        val
+      })
+      return Reflect.set(target, key, val)
+    }
+  })
 
-  const observe = <ObservableType, SubjectType>(
-    key: keyof XrpAsymClient,
-    subject: BehaviorSubject<SubjectType>,
-    map: (data: ObservableType) => SubjectType
-  ) =>
-    Object.defineProperty(plugin, key, {
-      writable: true,
-      set(val: ObservableType) {
-        subject.next(map(val))
-        this[key] = val
-      }
-    })
+  /** Emit updates when the specific property is updated on the plugin */
+  const observeProp = <K extends keyof XrpAsymClient>(
+    key: K
+  ): Observable<XrpAsymClient[K]> =>
+    plugin$.pipe(
+      filter(update => update.key === key),
+      map(({ val }) => val)
+    )
 
-  const outgoingChannelAmount2 = observe(
-    '_channelDetails',
-    new BehaviorSubject(new BigNumber(0)),
-    ({ amount }) => amount
+  /** Operator on observable to extract the amount of the claim/channel */
+  const getValue = map<
+    PaymentChannel | PaymentChannelClaim | undefined,
+    BigNumber
+  >(channel => new BigNumber(channel ? channel.amount : 0))
+
+  /** Operator on observable to convert xrp base units to XRP */
+  const toXrp = map<BigNumber, BigNumber>(amount =>
+    convert(xrpBase(amount), xrp())
   )
 
-  const observeChannelAmount = (key: keyof XrpAsymClient) =>
-    new Observable<BigNumber>(observer => {
-      observer.next(new BigNumber(0))
+  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  observeProp('_channelDetails')
+    .pipe(getValue)
+    .subscribe(outgoingCapacity$)
 
-      Object.defineProperty(plugin, key, {
-        writable: true,
-        set(channel: PaymentChannel) {
-          observer.next(new BigNumber(channel.amount))
-          this[key] = channel
-        }
-      })
-    })
+  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  observeProp('_paychan')
+    .pipe(getValue)
+    .subscribe(incomingCapacity$)
 
-  const observeClaimAmount = (key: keyof XrpAsymClient) =>
-    new Observable<BigNumber>(observer => {
-      observer.next(new BigNumber(0))
+  const totalSent$ = new BehaviorSubject(new BigNumber(0))
+  observeProp('_lastClaim')
+    .pipe(
+      getValue,
+      toXrp
+    )
+    .subscribe(totalSent$)
 
-      Object.defineProperty(plugin, key, {
-        writable: true,
-        set(claim: PaymentChannelClaim) {
-          const amount = convert(xrpBase(claim.amount), xrp())
-          observer.next(amount)
-          this[key] = claim
-        }
-      })
-    })
+  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
+  observeProp('_bestClaim')
+    .pipe(
+      getValue,
+      toXrp
+    )
+    .subscribe(totalReceived$)
 
-  // TODO Create helper!
-
-  const outgoingChannelAmount = observeChannelAmount('_channelDetails')
-  const incomingChannelAmount = observeChannelAmount('_paychan')
-
-  const foo = observeAmount('_paychan')
-
-  const maxInFlight = getNativeMaxInFlight(utils, settler)
+  const maxInFlight = getNativeMaxInFlight(
+    state,
+    SettlementEngineType.XrpPaychan
+  )
 
   /** Use wrapper middlewares for balance logic and max packet amount */
   const wrapperNamespace = 'ilp-plugin-xrp-asym-client:wrapper'
   const pluginWrapper = new PluginWrapper({
-    plugin,
+    plugin: pluginProxy,
+    prefundTo: maxInFlight,
+    maxBalance: maxInFlight,
+    maxPacketAmount: maxInFlight.times(2),
     assetCode: settler.assetCode,
     assetScale: settler.assetScale,
     log: createLogger(wrapperNamespace),
-    store: new MemoryStore(config.plugin.store, wrapperNamespace),
-    balance: getPluginBalanceConfig(maxInFlight),
-    maxPacketAmount: getPluginMaxPacketAmount(maxInFlight)
+    store: new MemoryStore(config.plugin.store, wrapperNamespace)
   })
 
-  // TODO Return/export RX.JS observables
+  const availableToDebit$ = new BehaviorSubject(new BigNumber(0))
+  pluginWrapper.payableBalance$
+    .pipe(
+      // Only emit updated values
+      distinctBigNum(),
+      map(amount => amount.negated()),
+      map(amount => convert(xrpBase(amount), xrp()))
+    )
+    .subscribe(availableToDebit$)
+
+  const idleAvailableToDebit = maxInFlight
+
+  const availableToCredit$ = new BehaviorSubject(new BigNumber(0))
+  pluginWrapper.receivableBalance$
+    .pipe(
+      // Only emit updated values
+      distinctBigNum(),
+      map(amount => maxInFlight.minus(amount)),
+      map(amount => convert(xrpBase(amount), xrp()))
+    )
+    .subscribe(availableToCredit$)
+
+  const idleAvailableToCredit = maxInFlight
 
   return {
     settlerType: SettlementEngineType.XrpPaychan,
+    credentialId: uniqueId(credential),
     plugin: pluginWrapper,
-    xrpPlugin: plugin
+    xrpPlugin: pluginProxy,
+    outgoingCapacity$,
+    incomingCapacity$,
+    availableToDebit$,
+    idleAvailableToDebit,
+    availableToCredit$,
+    idleAvailableToCredit,
+    totalSent$,
+    totalReceived$
   }
 }
-
-// TODO Fix this, now that I have types!
-
-const outgoingChannelAmount = ({ _channelDetails }: XrpAsymClient) =>
-  new BigNumber(_channelDetails ? _channelDetails.amount : 0)
-
-const incomingChannelAmount = ({ _paychan }: XrpAsymClient) =>
-  new BigNumber(_paychan ? _paychan.amount : 0)
-
-const outgoingClaimAmount = getValue('_lastClaim')
-const incomingClaimAmount = getValue('_bestClaim')
-
-export const totalSent = ({ xrpPlugin }: XrpPaychanUplink) =>
-  outgoingClaimAmount(xrpPlugin)
-
-export const totalReceived = ({ xrpPlugin }: XrpPaychanUplink) =>
-  incomingClaimAmount(xrpPlugin)
-
-export const availableToSend = ({ xrpPlugin }: XrpPaychanUplink) =>
-  outgoingChannelAmount(xrpPlugin).minus(outgoingClaimAmount(xrpPlugin))
-
-export const availableToReceive = ({ xrpPlugin }: XrpPaychanUplink) =>
-  incomingChannelAmount(xrpPlugin).minus(incomingClaimAmount(xrpPlugin))
-
-export const availableToDebit = ({ plugin }: XrpPaychanUplink) =>
-  convert(xrpBase(plugin.balance), xrp())
 
 export const baseLayerBalance = () => {
   // TODO Implement this! (and make it sufficiently generic)
 }
 
-export const deposit = async ({
-  authorize,
-  api
-}: {
-  authorize: AuthorizeDeposit
-  api: RippleAPI
-}) => {
-  // TODO Export this as a function to get the balance info of an account (for baseLayerBalance)
-  // Confirm that the account has sufficient funds to cover the reserve
-  const { ownerCount, xrpBalance } = await api.getAccountInfo(xrpAddress)
-  const {
-    validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
-  } = await api.getServerInfo()
-  // TODO What unit is minBalance in? xrp, or drops? Unclear
-  const minBalance =
-    +reserveBaseXRP +
-    +reserveIncrementXRP * ownerCount + // total current reserve
-    +reserveIncrementXRP + // reserve for the channel
-    +amount + // amount to deposit
-    10 // Assume channel creation fee of 10 drops (unclear)
-  const currentBalance = +xrpBalance
-  if (currentBalance < minBalance) {
-    throw new InsufficientFundsError()
-  }
+// TODO Temporarily comment out both deposit & withdraw
 
-  // TODO If the fee is ~0 and the user already entered the amount, do they need to authorize it?
-  const shouldContinue = await authorize({
-    value: amount /** XRP */,
-    fee: convert(drop(10), xrp()) /** XRP */
-  })
+// export const deposit = async ({
+//   authorize,
+//   api
+// }: {
+//   authorize: AuthorizeDeposit
+//   api: RippleAPI
+// }) => {
+//   // TODO Export this as a function to get the balance info of an account (for baseLayerBalance)
+//   // Confirm that the account has sufficient funds to cover the reserve
+//   const { ownerCount, xrpBalance } = await api.getAccountInfo(xrpAddress)
+//   const {
+//     validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
+//   } = await api.getServerInfo()
+//   // TODO What unit is minBalance in? xrp, or drops? Unclear
+//   const minBalance =
+//     +reserveBaseXRP +
+//     +reserveIncrementXRP * ownerCount + // total current reserve
+//     +reserveIncrementXRP + // reserve for the channel
+//     +amount + // amount to deposit
+//     10 // Assume channel creation fee of 10 drops (unclear)
+//   const currentBalance = +xrpBalance
+//   if (currentBalance < minBalance) {
+//     throw new InsufficientFundsError()
+//   }
 
-  // TODO Check whether a new channel needs to be open, or if we're funding an existing channel ...
-  //      (based on outgoing capacity)
-}
+//   // TODO If the fee is ~0 and the user already entered the amount, do they need to authorize it?
+//   const shouldContinue = await authorize({
+//     value: amount /** XRP */,
+//     fee: convert(drop(10), xrp()) /** XRP */
+//   })
 
-// TODO Streaming credit off connector will need to be performed prior to withdrawals!
-// TODO When should the internal plugin be disconnected?
-export const withdraw = (state: State) => (uplink: XrpPaychanUplink) => async (
-  authorize: AuthorizeWithdrawal
-) => {
-  const { api } = getSettler<XrpPaychanSettlementEngine>(state)(
-    uplink.settlerType
-  )
-  const { address, secret } = getCredential<ReadyXrpCredential>(state)(uplink)
+//   // TODO Check whether a new channel needs to be open, or if we're funding an existing channel ...
+//   //      (based on outgoing capacity)
+// }
 
-  /*
-   * Per https://github.com/interledgerjs/ilp-plugin-xrp-paychan-shared/pull/23,
-   * the TxSubmitter is a singleton per XRP address, so it will use the existing one
-   */
-  const submitter = createSubmitter(api, address, secret)
+// // TODO Streaming credit off connector will need to be performed prior to withdrawals!
+// // TODO When should the internal plugin be disconnected?
+// export const withdraw = (state: State) => (uplink: XrpPaychanUplink) => async (
+//   authorize: AuthorizeWithdrawal
+// ) => {
+//   const { api } = getSettler(state)
+//   const { address, secret } = getCredential<ReadyXrpCredential>(state)(uplink)
 
-  const closeChannel = (channelId: string) =>
-    submitter
-      .submit('preparePaymentChannelClaim', {
-        channel: channelId,
-        close: true
-      })
-      .catch((err: Error) => {
-        // TODO Log a more useful error?
-        throw new Error(`Failed to close channel: ${err.message}`)
-      })
+//   /*
+//    * Per https://github.com/interledgerjs/ilp-plugin-xrp-paychan-shared/pull/23,
+//    * the TxSubmitter is a singleton per XRP address, so it will use an existing one
+//    */
+//   const submitter = createSubmitter(api, address, secret)
 
-  const fee = convert(drop(10), xrp())
-  const value = interledgerBalance(uplink).minus(fee) // TODO Is this correct?
+//   const closeChannel = (channelId: string) =>
+//     submitter
+//       .submit('preparePaymentChannelClaim', {
+//         channel: channelId,
+//         close: true
+//       })
+//       .catch((err: Error) => {
+//         // TODO Log a more useful error?
+//         throw new Error(`Failed to close channel: ${err.message}`)
+//       })
 
-  // Prompt the user to authorize the withdrawal
-  await authorize({ fee, value })
+//   const fee = convert(drop(10), xrp())
+//   const value = interledgerBalance(uplink).minus(fee) // TODO Is this correct?
+//   // ^ TODO Use the channel value, not this!
 
-  const outgoingChannelId = uplink.xrpPlugin._channel
-  if (outgoingChannelId) {
-    await closeChannel(outgoingChannelId)
-  }
+//   // Prompt the user to authorize the withdrawal
+//   await authorize({ fee, value })
 
-  const incomingChannelId = uplink.xrpPlugin._clientChannel
-  if (incomingChannelId) {
-    await closeChannel(incomingChannelId)
-  }
+//   const outgoingChannelId = uplink.xrpPlugin._channel
+//   if (outgoingChannelId) {
+//     await closeChannel(outgoingChannelId)
+//   }
 
-  // TODO What will happen to the plugin state/channel balances after this event?
-}
+//   const incomingChannelId = uplink.xrpPlugin._clientChannel
+//   if (incomingChannelId) {
+//     await closeChannel(incomingChannelId)
+//   }
+
+//   // TODO What will happen to the plugin state/channel balances after this event?
+// }

@@ -5,12 +5,14 @@ export enum SettlementEngineType {
   /** Lightning daeman */
   Lnd = 'lnd',
   /** Machinomy Ethereum unidirectional payment channels */
-  Machinomy = 'machinomy',
+  // Machinomy = 'machinomy',
   /** XRP ledger native payment channels */
   XrpPaychan = 'xrp-paychan'
 }
 
 export interface SettlementEngine {
+  settlerType: SettlementEngineType // TODO
+
   assetCode: string
   assetScale: number
   baseUnit: (amount?: BigNumber.Value) => AssetUnit

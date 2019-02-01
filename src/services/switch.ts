@@ -54,8 +54,9 @@ export const streamMoney = (state: State) => async ({
   dest,
   slippage = 0.01
 }: StreamMoneyOpts): Promise<void> => {
-  const sourceSettler = getSettler(state)(source.settlerType)
-  const destSettler = getSettler(state)(dest.settlerType)
+  // TODO Fix this! (change getSettler to create settlement engine)
+  const sourceSettler = getSettler(state)(source.settlerType)!
+  const destSettler = getSettler(state)(dest.settlerType)!
 
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),
