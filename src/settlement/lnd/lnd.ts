@@ -161,7 +161,7 @@ export const setupCredential = (opts: ValidatedLndCredential) => async (
       throttleTime(100),
       mergeMap(() => from(fetchChannelBalance(service))),
       // Only emit updated values
-      distinctBigNum()
+      distinctBigNum
     )
     .subscribe(channelBalance$)
 
@@ -240,7 +240,7 @@ export const connectUplink = (state: State) => (
   account.payoutAmount$
     .pipe(
       // Only emit updated values
-      distinctBigNum(),
+      distinctBigNum,
       map(amount => amount.negated()),
       map(amount => convert(satoshi(amount), btc()))
     )
@@ -266,7 +266,7 @@ export const connectUplink = (state: State) => (
   account.balance$
     .pipe(
       // Only emit updated values
-      distinctBigNum(),
+      distinctBigNum,
       map(amount => balance.maximum.minus(amount)),
       map(amount => convert(satoshi(amount), btc()))
     )

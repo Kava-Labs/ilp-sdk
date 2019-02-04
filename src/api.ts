@@ -20,6 +20,8 @@ export const getSettler = <T extends SettlementEngineType>(state: State) => (
   settlerType: T
 ): State['settlers'][T] => state.settlers[settlerType]
 
+// TODO All of these methods should be on a unique, settlement engine -esque interface (with many generics)
+
 const getSettlerModule = (settlerType: SettlementEngineType) =>
   ({
     [SettlementEngineType.Lnd]: Lnd,
@@ -59,7 +61,7 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
   let state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
-    maxInFlightUsd: usd(0.1),
+    maxInFlightUsd: usd(0.05),
     settlers: {},
     credentials: [],
     uplinks: []
@@ -111,6 +113,9 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     if (alreadyExists) {
       throw new Error('Cannot create duplicate uplink')
     }
+
+    // TODO Should the deposit be performed after this?
+    // TODO Disable settlement until after this is completed?
 
     const uplink = await connectUplink(state)(readyCredential)({
       settlerType: SettlementEngineType.Lnd,

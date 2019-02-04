@@ -24,7 +24,7 @@ import {
   ReadyUplink,
   distinctBigNum
 } from '../../uplink'
-import { Observable, BehaviorSubject, Subject, pipe } from 'rxjs'
+import { Observable, BehaviorSubject, Subject } from 'rxjs'
 import { Flavor } from 'types/util'
 import { map, filter } from 'rxjs/operators'
 
@@ -33,9 +33,6 @@ import { map, filter } from 'rxjs/operators'
  * SETTLEMENT ENGINE
  * ------------------------------------
  */
-
-/** TODO  */
-// const settlerType = SettlementEngineType.XrpPaychan
 
 const getSettler = (state: State) =>
   state.settlers[SettlementEngineType.XrpPaychan]! // TODO Yuck!
@@ -120,7 +117,6 @@ export const setupCredential = (cred: ValidatedXrpSecret) => async (
   }
 }
 
-// TODO Is this used outside of "getCredential" ?
 export const uniqueId = (cred: ReadyXrpCredential): ValidatedXrpAddress =>
   cred.address
 
@@ -220,18 +216,25 @@ export const connectUplink = (state: State) => (
 
   const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
   observeProp('_channelDetails')
-    .pipe(getValue)
+    .pipe(
+      getValue,
+      distinctBigNum
+    )
     .subscribe(outgoingCapacity$)
 
   const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
   observeProp('_paychan')
-    .pipe(getValue)
+    .pipe(
+      getValue,
+      distinctBigNum
+    )
     .subscribe(incomingCapacity$)
 
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
   observeProp('_lastClaim')
     .pipe(
       getValue,
+      distinctBigNum,
       toXrp
     )
     .subscribe(totalSent$)
@@ -240,6 +243,7 @@ export const connectUplink = (state: State) => (
   observeProp('_bestClaim')
     .pipe(
       getValue,
+      distinctBigNum,
       toXrp
     )
     .subscribe(totalReceived$)
@@ -249,7 +253,7 @@ export const connectUplink = (state: State) => (
     SettlementEngineType.XrpPaychan
   )
 
-  /** Use wrapper middlewares for balance logic and max packet amount */
+  // Use wrapper middlewares for balance logic and max packet amount
   const wrapperNamespace = 'ilp-plugin-xrp-asym-client:wrapper'
   const pluginWrapper = new PluginWrapper({
     plugin: pluginProxy,
@@ -266,7 +270,7 @@ export const connectUplink = (state: State) => (
   pluginWrapper.payableBalance$
     .pipe(
       // Only emit updated values
-      distinctBigNum(),
+      distinctBigNum,
       map(amount => amount.negated()),
       map(amount => convert(xrpBase(amount), xrp()))
     )
@@ -278,7 +282,7 @@ export const connectUplink = (state: State) => (
   pluginWrapper.receivableBalance$
     .pipe(
       // Only emit updated values
-      distinctBigNum(),
+      distinctBigNum,
       map(amount => maxInFlight.minus(amount)),
       map(amount => convert(xrpBase(amount), xrp()))
     )

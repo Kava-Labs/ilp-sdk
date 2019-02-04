@@ -207,7 +207,7 @@ export const connectUplink = (state: State) => (credential: any) => async (
     await generateSecret() // TODO Use this from the config
   )
 
-  const log = createLogger(`ilp:test`)
+  const log = createLogger(`ilp:test:${settler.assetCode}`)
 
   // TODO Better explanation here?
   // TODO Is this correct? Previously I just used `combineLatest` and `sumAll`
@@ -221,8 +221,8 @@ export const connectUplink = (state: State) => (credential: any) => async (
     .pipe(
       tap(vals => {
         // TODO Temporary! Remove this!
-        log.info(`OUTGOING CAPACITY:  ${vals[0]}`)
-        log.info(`AVAILABLE TO DEBIT: ${vals[1]}`)
+        // log.info(`OUTGOING CAPACITY:  ${vals[0]}`)
+        // log.info(`AVAILABLE TO DEBIT: ${vals[1]}`)
       }),
       sumAll()
     )
@@ -234,10 +234,24 @@ export const connectUplink = (state: State) => (credential: any) => async (
     .pipe(sumAll())
     .subscribe(balance$)
 
+  balance$.subscribe(amount => {
+    log.info('BALANCE: ', amount.toString())
+  })
+
   const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
   combineLatest(incomingCapacity$, availableToCredit$)
     .pipe(sumAll())
-    .subscribe(availableToReceive$)
+    .subscribe({
+      next: val => {
+        availableToReceive$.next(val)
+      },
+      complete: () => {
+        availableToReceive$.complete()
+      },
+      error: err => {
+        availableToReceive$.error(err)
+      }
+    })
 
   return Object.assign(handlers, {
     ...settlerUplink,
@@ -378,19 +392,23 @@ export const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
  * ------------------------------------
  */
 
-export type AuthorizeDeposit = (params: {
-  /** Total amount that will move from layer 1 to layer 2, in units of exchange */
-  value: BigNumber
-  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  fee: BigNumber
-}) => Promise<boolean>
+export type AuthorizeDeposit = (
+  params: {
+    /** Total amount that will move from layer 1 to layer 2, in units of exchange */
+    value: BigNumber
+    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+    fee: BigNumber
+  }
+) => Promise<boolean>
 
-export type AuthorizeWithdrawal = (params: {
-  /** Total amount that will move from layer 2 to layer 1, in units of exchange */
-  value: BigNumber
-  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  fee: BigNumber
-}) => Promise<boolean>
+export type AuthorizeWithdrawal = (
+  params: {
+    /** Total amount that will move from layer 2 to layer 1, in units of exchange */
+    value: BigNumber
+    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+    fee: BigNumber
+  }
+) => Promise<boolean>
 
 /**
  * ------------------------------------
@@ -452,8 +470,9 @@ export const disconnect = (uplink: ReadyUplink) => {
 export const sumAll = () =>
   map((values: BigNumber[]) => values.reduce((a, b) => a.plus(b)))
 
-export const distinctBigNum = () =>
-  distinctUntilChanged((prev: BigNumber, cur: BigNumber) => prev.eq(cur))
+export const distinctBigNum = distinctUntilChanged(
+  (prev: BigNumber, cur: BigNumber) => prev.eq(cur)
+)
 
 // TODO Remove these?
 
