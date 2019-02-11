@@ -13,56 +13,27 @@ import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
 import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
-import {
-  getOrCreateSettler,
-  State,
-  ReadyCredentials,
-  SettlementModule,
-  SettlementModules
-} from './api'
+import { getOrCreateSettler, State } from './api'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { SettlementEngine, SettlementEngineType } from './settlement'
-import * as Lnd from './settlement/lnd/lnd'
-import * as XrpPaychan from './settlement/xrp-paychan/xrp-paychan'
+import { LndBaseUplink, LndUplinkConfig } from './settlement/lnd/lnd'
+import {
+  XrpPaychanBaseUplink,
+  XrpPaychanUplinkConfig
+} from './settlement/xrp-paychan/xrp-paychan'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
-import { generateSecret } from './utils/crypto'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from 'utils/middlewares'
 
 const log = createLogger('switch-api:uplink')
 
-type SettlementModule3<
-  TSettlerType extends SettlementEngineType
-> = TSettlerType extends SettlementEngineType.Lnd
-  ? Lnd.LndSettlementModule
-  : TSettlerType extends SettlementEngineType.XrpPaychan
-  ? XrpPaychan.XrpPaychanSettlementModule
-  : never
-
-// TODO Yuck! Remove this!
-export const getSettlerModule = <TSettlerType extends SettlementEngineType>(
-  settlerType: TSettlerType
-): SettlementModule3<TSettlerType> => {
-  switch (settlerType) {
-    case SettlementEngineType.Lnd:
-      return Lnd.settlementModule as SettlementModule3<TSettlerType>
-    case SettlementEngineType.XrpPaychan:
-      return XrpPaychan.settlementModule as SettlementModule3<TSettlerType>
-    default:
-      throw new Error('fuck')
-  }
-}
-
-declare const b: SettlementEngineType
-const a = getSettlerModule(b)
-
-/**
- * Build the ledger-specific uplink, and decorate it with generic functionality
- */
-
 export interface BaseUplinkConfig {
   settlerType: SettlementEngineType
+  stream: {
+    /** Enables deterministic generation of previous shared secrets so we can accept payments */
+    serverSecret: Buffer
+  }
   plugin: {
     btp: {
       serverUri: string
@@ -72,18 +43,13 @@ export interface BaseUplinkConfig {
   }
 }
 
-export type UplinkConfig = (
-  | Lnd.LndUplinkConfig
-  | XrpPaychan.XrpPaychanUplinkConfig) &
+export type UplinkConfig = (LndUplinkConfig | XrpPaychanUplinkConfig) &
   BaseUplinkConfig
 
 export interface BaseUplink {
   readonly plugin: Plugin
   readonly settlerType: SettlementEngineType
   readonly credentialId: string
-
-  // BALANCES
-
   /**
    * Amount of our *money* in layer 2 we have custody over,
    * immediately available for us to send to our peer
@@ -104,39 +70,11 @@ export interface BaseUplink {
    * (money that our peer cannot directly send back to us)
    */
   readonly totalSent$: BehaviorSubject<BigNumber>
-
-  // TODO These aren't currently used, but may be added back in the future:
-
-  /**
-   * Amount of *credit* our peer *is* indebted to us,
-   * immediately available for us to spend from
-   *
-   * - Essentially, the amount prefunded at any moment in time
-   */
-  // readonly availableToDebit$: BehaviorSubject<BigNumber>
-  /**
-   * Amount of *credit* our peer *should be* indebted to us
-   * after we've settled up with them (settleTo)
-   */
-  // readonly idleAvailableToDebit: BigNumber
-  /**
-   * Amount of *credit* we *are* extending to our peer,
-   * immediately available for our peer to spend from
-   *
-   * TODO "our peer to spend from" isn't true/the best description
-   */
-  // readonly availableToCredit$: BehaviorSubject<BigNumber>
-  /**
-   * Amount of *credit* that we *should be* extending to our peer
-   * after they've settled up with us (max balance - settleTo)
-   */
-  // readonly idleAvailableToCredit: BigNumber
 }
 
-export type ReadyUplink = (
-  | Lnd.LndBaseUplink
-  // | BaseMachinomyUplink
-  | XrpPaychan.XrpPaychanBaseUplink) & {
+export type BaseUplinks = LndBaseUplink | XrpPaychanBaseUplink
+
+export interface ReadyUplink {
   /** Wrapper plugin with balance logic to enforce packet clearing and perform accounting */
   readonly pluginWrapper: PluginWrapper
   /** Handle incoming packets from the endpoint sending money or trading */
@@ -149,22 +87,17 @@ export type ReadyUplink = (
   readonly maxInFlight: BigNumber
   /** Total amount in layer 2 that can be claimed on layer 1 */
   readonly balance$: BehaviorSubject<BigNumber>
-  /**
-   * Total amount that we can send immediately over Interledger,
-   * including money in layer 2 and amount to debit from connector
-   */
+  /** Total amount that we can send immediately over Interledger */
   readonly availableToSend$: BehaviorSubject<BigNumber>
-  /**
-   * Total amount that we could receive immediately over Interledger,
-   * including credit we're extending and incoming capacity in layer 2
-   */
+  /** Total amount that we could receive immediately over Interledger */
   readonly availableToReceive$: BehaviorSubject<BigNumber>
   /** STREAM server to accept incoming payments from any Interledger user */
   readonly streamServer: StreamServer
 }
 
-// TODO Fix the below 6 lines!!! REALLY bad! (also ADD CORRECT TYPES)
-export const connectUplink = (state: State) => (uplink: BaseUplink) => async (
+export type ReadyUplinks = ReadyUplink & BaseUplinks
+
+export const connectUplink = (state: State) => (uplink: BaseUplinks) => async (
   config: BaseUplinkConfig
 ): Promise<ReadyUplink> => {
   const settler = await getOrCreateSettler(state, config.settlerType)
@@ -175,32 +108,15 @@ export const connectUplink = (state: State) => (uplink: BaseUplink) => async (
     totalReceived$
   } = uplink
 
-  // Connect the plugin & confirm the upstream connector is using the correct asset
   await plugin.connect()
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
-  // Calculate available balance
   const balance$ = new BehaviorSubject(new BigNumber(0))
   combineLatest(outgoingCapacity$, totalReceived$)
     .pipe(sumAll)
     .subscribe(balance$)
 
-  // TODO Credit extended shouldn't be included in the incoming capacity:
-  //      For example, if the peer doesn't have that capacity to send us the final settlement,
-  //      the settlement shouldn't be attempted in the first place
-
-  // TODO If I have 0 availableToCredit -- e.g., I've extended credit --
-  //      the incoming capacity should be LESS how much credit I've extended
-  //      because I'm expecting a settlement for that amount
-  // const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
-  // combineLatest(incomingCapacity$, availableToCredit$)
-  //   .pipe(sumAll)
-  //   .subscribe(availableToReceive$)
-  // TODO ^ Does this work, or do I need individual next, complete, error?
-
-  // TODO Peg the max in flight for this specific uplink for simplicity
-  // TODO Create the balance wrapper here for less duplication
-  const maxInFlight = await getNativeMaxInFlight(state, credential.settlerType)
+  const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
   const pluginWrapper = new PluginWrapper({
     plugin,
     maxBalance: maxInFlight,
@@ -210,24 +126,19 @@ export const connectUplink = (state: State) => (uplink: BaseUplink) => async (
     log: createLogger(`switch-api:${settler.assetCode}:balance`),
     store: new MemoryStore(config.plugin.store, 'wrapper')
   })
-  // TODO Are availableToCredit, idleAvailableToCredit, availableToDebit and idleAvailableToCredit actually important now!?
 
-  // TODO Map balanceBalance and availableToCredit to the correct units (example:)
-  /*
-  const availableToDebit$ = new BehaviorSubject(new BigNumber(0))
-  pluginWrapper.payableBalance$
-    .pipe(
-      // Only emit updated values
-      distinctBigNum,
-      map(amount => amount.negated()),
-      map<BigNumber, BigNumber>(amount => convert(xrpBase(amount), xrp()))
-    )
-    .subscribe(availableToDebit$)
-  */
+  // TODO Add back "availableToCredit" and "availableToDebit"
+  //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
 
-  // Setup internal packet handlers and routing
+  // TODO Also, credit extended should NOT be included in incoming capacity since
+  //      the peer needs the capacity to send us the settlement for that -- it should be subtracted!
 
-  // TODO These handlers are mutated... yuck!
+  const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
+  incomingCapacity$.subscribe(availableToReceive$)
+
+  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
+  outgoingCapacity$.subscribe(availableToSend$)
+
   const handlers: {
     streamServerHandler: DataHandler
     streamClientHandler: IlpPrepareHandler
@@ -236,6 +147,7 @@ export const connectUplink = (state: State) => (uplink: BaseUplink) => async (
     streamClientHandler: defaultIlpPrepareHandler
   }
 
+  // Setup internal packet handlers and routing
   setupHandlers(
     pluginWrapper,
     clientAddress,
@@ -250,21 +162,32 @@ export const connectUplink = (state: State) => (uplink: BaseUplink) => async (
   const streamServer = await startStreamServer(
     plugin,
     registerServerHandler,
-    await generateSecret() // TODO Use this from the config
+    config.stream.serverSecret
   )
 
   return Object.assign(handlers, {
     ...uplink,
-    pluginWrapper,
     clientAddress,
     streamServer,
-    balance$
-    // availableToSend$,
-    // availableToReceive$
+    maxInFlight,
+    pluginWrapper,
+    balance$,
+    availableToSend$,
+    availableToReceive$
   })
 }
 
-// EFFECT: registers the handlers on the plugin itself
+/**
+ * Register handlers for incoming packets, routing incoming payments to the STREAM
+ * server, and all other packets to the internal switch/trading service.
+ *
+ * @param plugin ILP plugin to send and receive packets
+ * @param clientAddress Resolved address of the root plugin, to differentiate connection tags
+ * @param streamServerHandler Handler registered by the STREAM server for anonymous payments
+ * @param streamClientHandler Handler for packets sent uplink -> uplink within the api itself
+ *
+ * EFFECT: registers handlers on the plugin
+ */
 export const setupHandlers = (
   plugin: Plugin,
   clientAddress: string,
@@ -274,10 +197,7 @@ export const setupHandlers = (
   plugin.deregisterDataHandler()
   plugin.registerDataHandler(async (data: Buffer) => {
     // Apparently plugin-btp will pass data as undefined...
-    if (!data) {
-      // ...and it will (thankfully) translate this into a BTP error
-      throw new Error()
-    }
+    if (!data) throw new Error('no ilp packet included')
 
     const prepare = deserializeIlpPrepare(data)
     const hasConnectionTag = prepare.destination
@@ -285,9 +205,9 @@ export const setupHandlers = (
       .split('.')
       .some(a => !!a)
     return hasConnectionTag
-      ? // Connection ID exists in the ILP address, so route to Stream server
+      ? // Connection ID exists in the ILP address, so route to Stream server (e.g. g.kava.39hadn9ma.~n32j7ba)
         streamServerHandler(data)
-      : // ILP address is for the root plugin, so route packet to sending connection
+      : // ILP address is for the root plugin, so route packet to sending connection (e.g. g.kava.39hadn9ma)
         serializeIlpReply(await streamClientHandler(prepare))
   })
 }
@@ -320,18 +240,21 @@ const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
  * ------------------------------------
  */
 
-// TODO Settle (up to) (payableBalance - packet amount)? BEFORE sending the packet!
-
 /**
- * Serialize and send an ILP PREPARE to the upstream connector
+ * Serialize and send an ILP PREPARE to the upstream connector,
+ * and prefund the value of the packet (assumes peer credit limit is 0)
  */
 export const sendPacket = async (
   uplink: ReadyUplink,
   prepare: IlpPrepare
 ): Promise<IlpReply> => {
-  // TODO Limit this by payableBalance?
+  const additionalPrefundRequired = uplink.pluginWrapper.payableBalance$.value.minus(
+    prepare.amount
+  )
+
+  // If we've already prefunded enough and the amount is 0 or negative, sendMoney will simply return
   uplink.pluginWrapper
-    .sendMoney(prepare.amount)
+    .sendMoney(additionalPrefundRequired.toString())
     .catch(err => log.error(`Error during outgoing settlement: `, err))
   return deserializeIlpReply(
     await uplink.pluginWrapper.sendData(serializeIlpPrepare(prepare))
@@ -367,8 +290,6 @@ export const getNativeMaxInFlight = async (
   )
 }
 
-// TODO Should I set/add back the max packet amount?
-
 /**
  * ------------------------------------
  * DEPOSITS & WITHDRAWALS
@@ -398,7 +319,7 @@ export type AuthorizeWithdrawal = (params: {
 /**
  * Gracefully end the session so the uplink can no longer send/receive
  */
-export const disconnect = async (uplink: ReadyUplink) => {
+export const disconnect = async (uplink: ReadyUplinks) => {
   await stopStreamServer(uplink.streamServer).catch(err =>
     log.error('Error stopping Stream server: ', err)
   )
