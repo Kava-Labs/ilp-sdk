@@ -3,16 +3,15 @@ import BigNumber from 'bignumber.js'
 import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
 import {
   sendPacket,
-  ReadyUplink,
   deregisterPacketHandler,
   registerPacketHandler,
-  getNativeMaxInFlight
+  ReadyUplinks
 } from '../uplink'
 import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
-import { State, getOrCreateSettler } from '../api'
+import { State, getOrCreateSettler } from '..'
 
 const log = createLogger('switch-api:stream')
 
@@ -23,21 +22,6 @@ const IDLE_TIMEOUT = 10000
 
 /** Amount of time in the future when packets should expire */
 const EXPIRATION_WINDOW = 5000
-
-export interface StreamMoneyOpts {
-  /** Amount of money to be sent over stream, in units of exchange */
-  amount: BigNumber
-  /** Send assets via the given source ledger/plugin */
-  source: ReadyUplink
-  /** Receive assets via the given destination ledger/plugin */
-  dest: ReadyUplink
-  /**
-   * Maximum percentage of slippage allowed. If the per-packet exchange rate
-   * drops below the price oracle's rate minus this slippage,
-   * the packet will be rejected
-   */
-  slippage?: BigNumber.Value
-}
 
 /**
  * Send money between the two upinks, with the total untrusted
@@ -53,7 +37,20 @@ export const streamMoney = (state: State) => async ({
   source,
   dest,
   slippage = 0.01
-}: StreamMoneyOpts): Promise<void> => {
+}: {
+  /** Amount of money to be sent over stream, in units of exchange */
+  amount: BigNumber
+  /** Send assets via the given source ledger/plugin */
+  source: ReadyUplinks
+  /** Receive assets via the given destination ledger/plugin */
+  dest: ReadyUplinks
+  /**
+   * Maximum percentage of slippage allowed. If the per-packet exchange rate
+   * drops below the price oracle's rate minus this slippage,
+   * the packet will be rejected
+   */
+  slippage?: BigNumber.Value
+}): Promise<void> => {
   const sourceSettler = await getOrCreateSettler(state, source.settlerType)
   const destSettler = await getOrCreateSettler(state, dest.settlerType)
 
@@ -159,18 +156,18 @@ export const streamMoney = (state: State) => async ({
     }
 
     let packetAmount = BigNumber.min(
-      await getNativeMaxInFlight(state, source.settlerType),
+      source.maxInFlight,
       remainingAmount,
       maxPacketAmount
     )
 
     // Distribute the remaining amount to send such that the per-packet amount is approximately equal
     const remainingNumPackets = remainingAmount
-      .div(packetAmount)
-      .dp(0, BigNumber.ROUND_CEIL)
+      .dividedBy(packetAmount)
+      .decimalPlaces(0, BigNumber.ROUND_CEIL)
     packetAmount = remainingAmount
-      .div(remainingNumPackets)
-      .dp(0, BigNumber.ROUND_CEIL)
+      .dividedBy(remainingNumPackets)
+      .decimalPlaces(0, BigNumber.ROUND_CEIL)
 
     const packetNum = (prepareCount += 1)
 
