@@ -8,7 +8,7 @@ import {
 } from 'ilp-packet'
 import { DataHandler, Logger, MoneyHandler, Plugin } from '../types/plugin'
 import { MemoryStore } from './store'
-import { defaultDataHandler, defaultMoneyHandler } from './packet'
+import { defaultDataHandler } from './packet'
 import { BehaviorSubject } from 'rxjs'
 
 // Almost never use exponential notation
@@ -16,7 +16,6 @@ BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
 export interface PluginWrapperOpts {
   plugin: Plugin
-  prefundTo?: BigNumber.Value
   maxBalance?: BigNumber.Value
   maxPacketAmount?: BigNumber.Value
   log: Logger
@@ -31,11 +30,10 @@ export class PluginWrapper implements Plugin {
   // Internal plugin
   private readonly plugin: Plugin
   private dataHandler: DataHandler = defaultDataHandler
-  private moneyHandler: MoneyHandler = defaultMoneyHandler
 
   /**
    * Amount owed *by us* to our peer for **our packets they've forwarded** (outgoing balance)
-   * - Positive amount indicates we're indebted to the peer and need to pay them for packets they're already forwarded
+   * - Positive amount indicates we're indebted to the peer and need to pay them for packets they've already forwarded
    * - Negative amount indicates we've prefunded the peer and have as much credit available to spend
    *
    * TRIGGERS:
@@ -47,18 +45,6 @@ export class PluginWrapper implements Plugin {
    * - Determines when outgoing settlements to peer occur and for how much
    */
   readonly payableBalance$: BehaviorSubject<BigNumber>
-  /**
-   * Positive amount to prefund, which decreases the payable/outgoing balance
-   * - If peer is not extending us very little/no credit, we can still send
-   *   packets by prefunding
-   */
-  private readonly prefundTo: BigNumber
-  /**
-   * Should any outgoing settlements be triggered?
-   * - If settlement is disabled, balances will still be correctly accounted for
-   *   so settlements can proceed if it's later re-enabled
-   */
-  isSettlementEnabled = true
 
   /**
    * Amount owed *to us* by our peer for **their packets we've forwarded** (incoming balance)
@@ -74,6 +60,7 @@ export class PluginWrapper implements Plugin {
    * - Determines if an incoming ILP PREPARE is forwarded/cleared
    */
   readonly receivableBalance$: BehaviorSubject<BigNumber>
+
   /**
    * Positive maximum amount of packets we'll forward on credit before the peer must settle up
    * - Since it's credit extended, if the peer went offline/disappeared, we'd still be owed the money
@@ -91,7 +78,6 @@ export class PluginWrapper implements Plugin {
 
   constructor({
     plugin,
-    prefundTo = 0,
     maxBalance = Infinity,
     maxPacketAmount = Infinity,
     log,
@@ -109,7 +95,6 @@ export class PluginWrapper implements Plugin {
     this.assetScale = assetScale
 
     /** Payable balance (outgoing/settlement) */
-    this.prefundTo = new BigNumber(prefundTo).dp(0, BigNumber.ROUND_FLOOR)
     this.payableBalance$ = new BehaviorSubject(
       new BigNumber(this.store.getSync('payableBalance') || 0)
     )
@@ -156,42 +141,16 @@ export class PluginWrapper implements Plugin {
       this.payableBalance$.next(this.payableBalance$.value.plus(amount))
     }
 
-    // Attempt to settle on fulfills *and* T04s (to resolve stalemates)
-    const shouldSettle =
-      isFulfill(reply) || (isReject(reply) && reply.code === 'T04')
-    if (shouldSettle) {
-      this.tryToSettle()
-    }
-
     return response
   }
 
-  private tryToSettle() {
-    if (!this.isSettlementEnabled) {
-      return
-    }
-
-    const budget = this.prefundTo.plus(this.payableBalance$.value)
-    if (budget.lte(0)) {
-      return
-    }
-
+  async sendMoney(budget: string) {
     this.log.info(`Settlement triggered for ${this.format(budget)}`)
     this.payableBalance$.next(this.payableBalance$.value.minus(budget))
 
     this.plugin
-      .sendMoney(budget.toString())
-      .catch(err => this.log.error(`Error during settlement: ${err.message}`))
-  }
-
-  /** Enable outgiong settlements to the peer */
-  enableSettlement() {
-    this.isSettlementEnabled = true
-  }
-
-  /** Disable/prevent any subsequent outgoing settlements to peer from occuring */
-  disableSettlement() {
-    this.isSettlementEnabled = false
+      .sendMoney(budget)
+      .catch(err => this.log.error('Error during settlement: ', err))
   }
 
   /*
@@ -199,10 +158,8 @@ export class PluginWrapper implements Plugin {
    */
 
   private handleMoney(amount: string) {
-    const next = () => this.moneyHandler(amount)
-
     if (new BigNumber(amount).isZero()) {
-      return next()
+      return
     }
 
     const newBalance = this.receivableBalance$.value.minus(amount)
@@ -212,14 +169,12 @@ export class PluginWrapper implements Plugin {
       )}, new balance is ${this.format(newBalance)}`
     )
     this.receivableBalance$.next(newBalance)
-
-    return next()
   }
 
   private async handleData(data: Buffer): Promise<Buffer> {
     const next = () => this.dataHandler(data)
 
-    // Ignore 0 amount packets (no middlewares apply)
+    // Ignore 0 amount packets (no middlewares apply, so don't log)
     const { amount } = deserializeIlpPrepare(data)
     if (amount === '0') {
       return next()
@@ -270,8 +225,6 @@ export class PluginWrapper implements Plugin {
     if (isReject(reply)) {
       this.log.debug(`Credited ${this.format(amount)} in response to REJECT`)
       this.receivableBalance$.next(this.receivableBalance$.value.minus(amount))
-    } else {
-      this.tryToSettle()
     }
 
     return response
@@ -282,8 +235,7 @@ export class PluginWrapper implements Plugin {
    */
 
   async connect(opts?: object) {
-    await this.plugin.connect(opts)
-    this.tryToSettle() // TODO Should this be await-ed?
+    return this.plugin.connect(opts)
   }
 
   disconnect() {
@@ -294,12 +246,6 @@ export class PluginWrapper implements Plugin {
     return this.plugin.isConnected()
   }
 
-  async sendMoney() {
-    throw new Error(
-      'sendMoney is not supported: use balance wrapper for balance configuration'
-    )
-  }
-
   registerDataHandler(handler: DataHandler) {
     if (this.dataHandler !== defaultDataHandler) {
       throw new Error('request handler is already registered')
@@ -308,23 +254,17 @@ export class PluginWrapper implements Plugin {
     this.dataHandler = handler
   }
 
-  registerMoneyHandler(handler: MoneyHandler) {
-    if (this.moneyHandler !== defaultMoneyHandler) {
-      throw new Error('money handler is already registered')
-    }
-
-    this.moneyHandler = handler
-  }
-
   deregisterDataHandler() {
     this.dataHandler = defaultDataHandler
   }
 
-  deregisterMoneyHandler() {
-    this.moneyHandler = defaultMoneyHandler
+  registerMoneyHandler() {
+    return
   }
 
-  /* Utils */
+  deregisterMoneyHandler() {
+    return
+  }
 
   private format(amount: BigNumber.Value) {
     return `${new BigNumber(amount).shiftedBy(

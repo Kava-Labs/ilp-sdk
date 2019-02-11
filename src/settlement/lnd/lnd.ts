@@ -1,5 +1,5 @@
 import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
-import { State, LedgerEnv, getSettler } from '../../api'
+import { State, LedgerEnv, getSettler, SettlementModule } from '../../api'
 import BigNumber from 'bignumber.js'
 import { fromNullable, Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
@@ -39,7 +39,9 @@ import { Flavor } from '../../types/util'
  */
 
 export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
-export const setupEngine = (ledgerEnv: LedgerEnv): LndSettlementEngine => ({
+export const setupEngine = async (
+  ledgerEnv: LedgerEnv
+): Promise<LndSettlementEngine> => ({
   settlerType: SettlementEngineType.Lnd, // TODO
 
   assetCode: 'BTC',
@@ -133,9 +135,9 @@ const getCredential = (
     )[0]
   )
 
-export const setupCredential = (opts: ValidatedLndCredential) => async (
-  state: State
-): Promise<ReadyLndCredential> => {
+export const setupCredential = (
+  opts: ValidatedLndCredential
+) => async (): Promise<ReadyLndCredential> => {
   // Create and connect the internal LND service (passed to plugins)
   const service = connectLnd(opts)
   await waitForReady(service)
@@ -175,7 +177,7 @@ export const setupCredential = (opts: ValidatedLndCredential) => async (
   }
 }
 
-// TODO Also unsubscribe/end all of the event listeners (make sure no memory leaks)
+// TODO Also unsubscribe/end all of the event listeners (confirm there aren't any memory leaks)
 export const closeCredential = async ({ service }: ReadyLndCredential) =>
   service.close()
 
@@ -203,12 +205,14 @@ export const connectUplink = (state: State) => (
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  const settler = getSettler(state)(SettlementEngineType.Lnd)! // TODO "getSettler" should automatically create the uplink
+  // const settler = getSettler(state)(SettlementEngineType.Lnd)! // TODO "getSettler" should automatically create the uplink
 
+  // TODO Remove this?
   const maxInFlight = getNativeMaxInFlight(state, SettlementEngineType.Lnd)
   const maxPacketAmount = getPluginMaxPacketAmount(maxInFlight)
   const balance = getPluginBalanceConfig(maxInFlight)
 
+  // TODO Remove balance from lightning plugin?
   const plugin = new LightningPlugin(
     {
       role: 'client',
@@ -229,53 +233,13 @@ export const connectUplink = (state: State) => (
     }
   )
 
-  const account = await plugin.loadAccount('peer')
+  // TODO Remove this abstraction... yuck!
+  // const account = await plugin.loadAccount('peer')
 
   const outgoingCapacity$ = credential.channelBalance$
   const incomingCapacity$ = new BehaviorSubject(new BigNumber(Infinity))
   const totalReceived$ = new BehaviorSubject(new BigNumber(0))
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
-
-  const availableToDebit$ = new BehaviorSubject(new BigNumber(0))
-  account.payoutAmount$
-    .pipe(
-      // Only emit updated values
-      distinctBigNum,
-      map(amount => amount.negated()),
-      map(amount => convert(satoshi(amount), btc()))
-    )
-    // TODO Simpler way to do this? Try .subscribe(availableToDebit$) again?
-    .subscribe({
-      next: val => {
-        availableToDebit$.next(val)
-      },
-      complete: () => {
-        availableToDebit$.complete()
-      },
-      error: err => {
-        availableToDebit$.error(err)
-      }
-    })
-
-  const idleAvailableToDebit = convert(
-    settler.baseUnit(balance.settleTo),
-    settler.exchangeUnit()
-  )
-
-  const availableToCredit$ = new BehaviorSubject(new BigNumber(0))
-  account.balance$
-    .pipe(
-      // Only emit updated values
-      distinctBigNum,
-      map(amount => balance.maximum.minus(amount)),
-      map(amount => convert(satoshi(amount), btc()))
-    )
-    .subscribe(availableToCredit$)
-
-  const idleAvailableToCredit = convert(
-    settler.baseUnit(balance.maximum.minus(balance.settleTo)),
-    settler.exchangeUnit()
-  )
 
   return {
     settlerType: SettlementEngineType.Lnd,
@@ -283,11 +247,32 @@ export const connectUplink = (state: State) => (
     plugin,
     outgoingCapacity$,
     incomingCapacity$,
-    availableToDebit$,
-    idleAvailableToDebit,
-    availableToCredit$,
-    idleAvailableToCredit,
     totalSent$,
     totalReceived$
   }
+}
+
+/**
+ * ------------------------------------
+ * SETTLEMENT MODULE
+ * ------------------------------------
+ */
+
+export type LndSettlementModule = SettlementModule<
+  SettlementEngineType.Lnd,
+  LndSettlementEngine,
+  ValidatedLndCredential,
+  ReadyLndCredential,
+  LndUplinkConfig,
+  LndBaseUplink,
+  ReadyLndUplink
+>
+
+// TODO Rename this?
+export const settlementModule: LndSettlementModule = {
+  setupEngine,
+  setupCredential,
+  uniqueId,
+  closeCredential,
+  connectUplink
 }

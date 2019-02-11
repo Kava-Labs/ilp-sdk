@@ -5,15 +5,14 @@ import {
   sendPacket,
   ReadyUplink,
   deregisterPacketHandler,
-  registerPacketHandler
+  registerPacketHandler,
+  getNativeMaxInFlight
 } from '../uplink'
 import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
-import { State, getSettler } from '../api'
-import { combineLatest } from 'rxjs'
-import { first } from 'rxjs/operators'
+import { State, getOrCreateSettler } from '../api'
 
 const log = createLogger('switch-api:stream')
 
@@ -41,7 +40,8 @@ export interface StreamMoneyOpts {
 }
 
 /**
- * Send money between the two upinks
+ * Send money between the two upinks, with the total untrusted
+ * amount bounded by the given maxInFlightUsd
  *
  * @param amount Total (maximum) amount to send, in units of exchange of source uplink
  * @param source Source uplink to send outgoing money
@@ -54,9 +54,8 @@ export const streamMoney = (state: State) => async ({
   dest,
   slippage = 0.01
 }: StreamMoneyOpts): Promise<void> => {
-  // TODO Fix this! (change getSettler to create settlement engine)
-  const sourceSettler = getSettler(state)(source.settlerType)!
-  const destSettler = getSettler(state)(dest.settlerType)!
+  const sourceSettler = await getOrCreateSettler(state, source.settlerType)
+  const destSettler = await getOrCreateSettler(state, dest.settlerType)
 
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),
@@ -80,6 +79,7 @@ export const streamMoney = (state: State) => async ({
    *   and use that to determine whether to fulfill it.
    */
 
+  // TODO Move this to uplink.ts so it's more abstracted
   const format = (amount: BigNumber) =>
     `${convert(
       sourceSettler.baseUnit(amount),
@@ -119,22 +119,7 @@ export const streamMoney = (state: State) => async ({
           amountToSend
         )} was fulfilled`
       )
-
-      // Wait for the settlements to finish
-      // TODO Add timeout here to reject if it doesn't occur?
-      // TODO This doesn't work when settlement is disabled/streaming credit off the connector
-      // return combineLatest(source.availableToDebit$, dest.availableToCredit$)
-      //   .pipe(
-      //     first(
-      //       ([availableToDebit, availableToCredit]) =>
-      //         // Ensure the source uplink has finished prefunding again
-      //         availableToDebit.gte(source.idleAvailableToDebit) &&
-      //         // Ensure the peer has finished settling up with the destination uplink
-      //         availableToCredit.gte(dest.idleAvailableToCredit)
-      //     )
-      //   )
-      //   .toPromise()
-    } else if (remainingAmount.lte(0)) {
+    } else if (remainingAmount.isNegative()) {
       return log.info(
         `stream sent too much: ${format(
           remainingAmount.negated()
@@ -173,21 +158,8 @@ export const streamMoney = (state: State) => async ({
       return Promise.reject()
     }
 
-    const availableToDebit = convert(
-      sourceSettler.exchangeUnit(source.availableToDebit$.value),
-      sourceSettler.baseUnit()
-    )
-    if (availableToDebit.lte(0)) {
-      /**
-       * Wait 5 ms to see if we've prefunded the connector
-       * some more and have a balance to spend down from
-       */
-      await new Promise(r => setTimeout(r, 5))
-      return trySendPacket()
-    }
-
     let packetAmount = BigNumber.min(
-      availableToDebit,
+      await getNativeMaxInFlight(state, source.settlerType),
       remainingAmount,
       maxPacketAmount
     )
