@@ -13,7 +13,7 @@ import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
 import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
-import { getOrCreateSettler, State } from './api'
+import { getOrCreateSettler, State } from '.'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { SettlementEngine, SettlementEngineType } from './settlement'
 import { LndBaseUplink, LndUplinkConfig } from './settlement/lnd/lnd'
@@ -75,7 +75,7 @@ export interface BaseUplink {
 export type BaseUplinks = LndBaseUplink | XrpPaychanBaseUplink
 
 export interface ReadyUplink {
-  /** Wrapper plugin with balance logic to enforce packet clearing and perform accounting */
+  /** Wrapper plugin with balance logic to and perform accounting and limit the packets we fulfill */
   readonly pluginWrapper: PluginWrapper
   /** Handle incoming packets from the endpoint sending money or trading */
   streamClientHandler: IlpPrepareHandler
@@ -99,7 +99,7 @@ export type ReadyUplinks = ReadyUplink & BaseUplinks
 
 export const connectUplink = (state: State) => (uplink: BaseUplinks) => async (
   config: BaseUplinkConfig
-): Promise<ReadyUplink> => {
+): Promise<ReadyUplinks> => {
   const settler = await getOrCreateSettler(state, config.settlerType)
   const {
     plugin,
@@ -319,7 +319,7 @@ export type AuthorizeWithdrawal = (params: {
 /**
  * Gracefully end the session so the uplink can no longer send/receive
  */
-export const disconnect = async (uplink: ReadyUplinks) => {
+export const closeUplink = async (uplink: ReadyUplinks) => {
   await stopStreamServer(uplink.streamServer).catch(err =>
     log.error('Error stopping Stream server: ', err)
   )

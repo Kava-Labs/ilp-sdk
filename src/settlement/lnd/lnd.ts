@@ -1,5 +1,5 @@
 import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
-import { State, LedgerEnv, getSettler, SettlementModule } from '../../api'
+import { State, LedgerEnv, getSettler, SettlementModule } from '../..'
 import BigNumber from 'bignumber.js'
 import { fromNullable, Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
@@ -39,7 +39,7 @@ import { Flavor } from '../../types/util'
  */
 
 export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
-export const setupEngine = async (
+const setupEngine = async (
   ledgerEnv: LedgerEnv
 ): Promise<LndSettlementEngine> => ({
   settlerType: SettlementEngineType.Lnd, // TODO
@@ -120,7 +120,7 @@ const fetchChannelBalance = async (lightning: LndService) => {
 }
 
 // TODO Is this used outside of "getCredential" ?
-export const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
+const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
   cred.identityPublicKey
 
 const getCredential = (
@@ -135,9 +135,9 @@ const getCredential = (
     )[0]
   )
 
-export const setupCredential = (
-  opts: ValidatedLndCredential
-) => async (): Promise<ReadyLndCredential> => {
+const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
+  ReadyLndCredential
+> => {
   // Create and connect the internal LND service (passed to plugins)
   const service = connectLnd(opts)
   await waitForReady(service)
@@ -199,7 +199,7 @@ export interface LndBaseUplink extends BaseUplink {
 
 export type ReadyLndUplink = LndBaseUplink & ReadyUplink
 
-export const connectUplink = (state: State) => (
+const connectUplink = (state: State) => (
   credential: ReadyLndCredential
 ) => async (config: LndUplinkConfig): Promise<LndBaseUplink> => {
   const server = config.plugin.btp.serverUri
@@ -263,13 +263,14 @@ export type LndSettlementModule = SettlementModule<
   LndSettlementEngine,
   ValidatedLndCredential,
   ReadyLndCredential,
-  LndUplinkConfig,
+  // LndUplinkConfig,
   LndBaseUplink,
   ReadyLndUplink
 >
 
 // TODO Rename this?
-export const settlementModule: LndSettlementModule = {
+export const Lnd: LndSettlementModule = {
+  settlerType: SettlementEngineType.Lnd,
   setupEngine,
   setupCredential,
   uniqueId,

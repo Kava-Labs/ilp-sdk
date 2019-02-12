@@ -1,6 +1,6 @@
 import { convert, gwei, wei } from '@kava-labs/crypto-rate-utils'
 import Web3 from 'web3'
-import { State } from '../../api'
+import { State } from '../..'
 import { MachinomySettlementEngine } from '../machinomy/machinomy'
 import axios from 'axios'
 
