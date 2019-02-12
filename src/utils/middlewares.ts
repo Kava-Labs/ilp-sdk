@@ -144,12 +144,16 @@ export class PluginWrapper implements Plugin {
     return response
   }
 
-  async sendMoney(budget: string) {
-    this.log.info(`Settlement triggered for ${this.format(budget)}`)
-    this.payableBalance$.next(this.payableBalance$.value.minus(budget))
+  async sendMoney(amount: string) {
+    if (parseInt(amount, 10) <= 0) {
+      return
+    }
+
+    this.log.info(`Settlement triggered for ${this.format(amount)}`)
+    this.payableBalance$.next(this.payableBalance$.value.minus(amount))
 
     this.plugin
-      .sendMoney(budget)
+      .sendMoney(amount)
       .catch(err => this.log.error('Error during settlement: ', err))
   }
 
