@@ -11,7 +11,8 @@ import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
-import { State, getOrCreateSettler } from '..'
+import { State } from '..'
+import { getOrCreateEngine } from '../engine'
 
 const log = createLogger('switch-api:stream')
 
@@ -51,8 +52,12 @@ export const streamMoney = (state: State) => async ({
    */
   slippage?: BigNumber.Value
 }): Promise<void> => {
-  const sourceSettler = await getOrCreateSettler(state, source.settlerType)
-  const destSettler = await getOrCreateSettler(state, dest.settlerType)
+  // TODO The state must be updated with the new settlers!
+  const [sourceSettler, state1] = await getOrCreateEngine(
+    state,
+    source.settlerType
+  )
+  const [destSettler, state2] = await getOrCreateEngine(state, dest.settlerType)
 
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),
@@ -240,7 +245,7 @@ export const streamMoney = (state: State) => async ({
           )
         } else if (newMaxPacketAmount.lt(packetAmount)) {
           log.debug(
-            `reducing packet amount from ${packetAmount} to ${maxPacketAmount}`
+            `reducing packet amount from ${packetAmount} to ${newMaxPacketAmount}`
           )
           maxPacketAmount = newMaxPacketAmount
         }

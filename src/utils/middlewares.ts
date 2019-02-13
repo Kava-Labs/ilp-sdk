@@ -161,7 +161,7 @@ export class PluginWrapper implements Plugin {
    * Incoming packets/settlements (receivable balance)
    */
 
-  private handleMoney(amount: string) {
+  private async handleMoney(amount: string) {
     if (new BigNumber(amount).isZero()) {
       return
     }

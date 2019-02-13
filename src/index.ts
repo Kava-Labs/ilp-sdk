@@ -5,105 +5,42 @@ import {
   usd
 } from '@kava-labs/crypto-rate-utils'
 import {
-  ReadyUplink,
-  connectUplink,
   BaseUplinkConfig,
-  BaseUplink,
   AuthorizeDeposit,
   AuthorizeWithdrawal,
   BaseUplinks,
   ReadyUplinks,
-  closeUplink
+  closeUplink,
+  depositToUplink,
+  isThatUplink,
+  withdrawFromUplink,
+  createUplink
 } from './uplink'
 import {
+  closeEngine,
   SettlementEngineType,
   SettlementEngine,
+  getOrCreateEngine,
   SettlementEngines
-} from './settlement'
+} from './engine'
+import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd/lnd'
 import {
-  Lnd,
-  LndSettlementModule,
-  ReadyLndCredential,
-  LndSettlementEngine,
-  ValidatedLndCredential,
-  closeCredential
-} from './settlement/lnd/lnd' // TODO Change these to import module & types
-import {
-  XrpPaychan,
   XrpPaychanSettlementModule,
-  ReadyXrpCredential,
-  XrpPaychanSettlementEngine,
-  ValidatedXrpSecret
-} from './settlement/xrp-paychan/xrp-paychan' // TODO Change these to import module & types
-import { generateToken, generateSecret } from './utils/crypto'
+  XrpPaychanSettlementEngine
+} from './settlement/xrp-paychan/xrp-paychan'
 import { streamMoney } from './services/switch'
 import BigNumber from 'bignumber.js'
+import {
+  ReadyCredentials,
+  getOrCreateCredential,
+  closeCredential,
+  isThatCredentialId,
+  ValidatedCredentials
+} from './credential'
 
-type SettlementModule2<
-  TSettlerType
-> = TSettlerType extends SettlementEngineType.Lnd
-  ? Lnd.LndSettlementModule
-  : TSettlerType extends SettlementEngineType.XrpPaychan
-  ? XrpPaychan.XrpPaychanSettlementModule
-  : never
+export type SettlementModules = LndSettlementModule | XrpPaychanSettlementModule
 
-// type SettlementModule3<
-//   SettlementEngineType.Lnd
-// > = Lnd.LndSettlementModule
-
-export const getSettlementModule = <T extends SettlementEngineType>(
-  settlerType: T
-) =>
-  ({
-    [SettlementEngineType.Lnd]: Lnd.settlementModule,
-    [SettlementEngineType.XrpPaychan]: XrpPaychan.settlementModule
-  }[settlerType])
-
-// export const getSettlementModule2 = <T extends SettlementEngineType>(
-//   settlerType: T
-// ): T extends SettlementEngineType.Lnd
-//   ? Lnd.LndSettlementModule
-//   : T extends SettlementEngineType.XrpPaychan
-//   ? XrpPaychan.XrpPaychanSettlementModule
-//   : never => {
-//   switch (settlerType) {
-//     case SettlementEngineType.Lnd:
-//       return Lnd.settlementModule
-//     case SettlementEngineType.XrpPaychan:
-//       return XrpPaychan.settlementModule
-//   }
-// }
-// ({
-//   [SettlementEngineType.Lnd]: Lnd.settlementModule,
-//   [SettlementEngineType.XrpPaychan]: XrpPaychan.settlementModule
-// }[settlerType])
-
-type NarrowSettlerType<
-  Union,
-  Tag extends SettlementEngineType
-> = Union extends {
-  settlerType: Tag
-}
-  ? Union
-  : never
-
-// type TagWithKey<TagName extends string, T> = {
-//   [K in keyof T]: { [_ in TagName]: K } & T[K]
-// }
-
-export const getOrCreateSettler = async <T extends SettlementEngineType>(
-  state: State,
-  settlerType: T
-) => {
-  const settler: SettlementEngine = await getSettlementModule(
-    settlerType
-  ).setupEngine(state.ledgerEnv)
-  state.settlers[settlerType] = settler
-  return settler
-}
-
-export type SettlementModules = LndSettlementModule | XrpPaychanSettlementModule // TODO The actual type should have deposit defined!
-
+// TODO Is this really necessarily, or could I rename them all to, e.g., "setupXrpCredential" ?
 export type SettlementModule<
   TSettlerType extends SettlementEngineType,
   /** Settlements engines */
@@ -116,31 +53,19 @@ export type SettlementModule<
   TBaseUplink extends BaseUplinks,
   TReadyUplink extends ReadyUplinks
 > = {
-  // TODO?
-  settlerType: TSettlerType
-
+  // settlerType: TSettlerType
   /** Settlement engine */
-
   readonly setupEngine: (ledgerEnv: LedgerEnv) => Promise<TSettlementEngine>
-
   /** Credentials */
-
   readonly setupCredential: (
     opts: TValidatedCredential
   ) => (state: State) => Promise<TReadyCredential>
-
   readonly uniqueId: (cred: TReadyCredential) => string
-
   readonly closeCredential: (cred: TReadyCredential) => Promise<void>
-
   /** Uplinks */
-
   readonly connectUplink: (
-    state: State
-  ) => (
     cred: TReadyCredential
-  ) => (config: BaseUplinkConfig) => Promise<TBaseUplink>
-
+  ) => (state: State) => (config: BaseUplinkConfig) => Promise<TBaseUplink>
   readonly deposit?: (
     uplink: TReadyUplink
   ) => (
@@ -149,7 +74,6 @@ export type SettlementModule<
     amount: BigNumber
     authorize: AuthorizeDeposit
   }) => Promise<void>
-
   readonly withdraw?: (
     uplink: TReadyUplink
   ) => (state: State) => (authorize: AuthorizeWithdrawal) => Promise<void>
@@ -159,115 +83,33 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
   let state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
-    maxInFlightUsd: usd(0.05),
+    maxInFlightUsd: usd(0.1),
     settlers: {},
     credentials: [],
     uplinks: []
   }
 
+  // TODO Move functions to outside connect, have them accept a state
+
   // TODO Add functionality to connect existing uplinks based on config
   //      (unnecessary/backburner until persistence is added)
 
-  // TODO Change the discriminant so it's all "SettlementEngineType" or the union
-  const add = async <
-    TSettlerType extends SettlementEngineType,
-    /** Settlements engines */
-    TSettlementEngine extends SettlementEngine,
-    /** Credentials */
-    TValidatedCredential extends ValidatedCredentials,
-    TReadyCredential extends ReadyCredentials,
-    /** Uplinks */
-    TUplinkConfig extends BaseUplinkConfig
-  >(
-    // TODO Are these necessary?
-    // TBaseUplink extends BaseUplinks,
-    // TReadyUplink extends TBaseUplink & ReadyUplinks
-    settlementModule: SettlementModule<
-      TSettlerType,
-      TSettlementEngine,
-      TValidatedCredential,
-      TReadyCredential,
-      // TUplinkConfig,
-      TBaseUplink,
-      TReadyUplink
-    >,
-    // | Lnd.LndSettlementModule
-    // | XrpPaychan.XrpPaychanSettlementModule,
-    // cred: ThenArg<ReturnType<T['setupEngine']>> */
-    // cred: ValidatedCredential & { settlerType: T }
-    // cred: GetCredential<T>
-    cred: TValidatedCredential
-  ): Promise<ReadyUplink> => {
-    // const settlerModule = getSettlerModule(cred.settlerType)
-    // const settlementModule = getSettlementModule<T>(cred)
-
-    // TODO Get the settler (create it if it doesn't exist)
-    let settler = state.settlers[cred.settlerType]
-    if (!settler) {
-      settler = await settlementModule.setupEngine(state.ledgerEnv)
-      state.settlers[cred.settlerType] = settler
-    }
-
-    let readyCredential: TReadyCredential = await settlementModule.setupCredential(
-      cred
-    )(state)
-    const credentialId = settlementModule.uniqueId(readyCredential)
-
-    const existingCredential = state.credentials
-      .filter(
-        (someCredential): someCredential is TReadyCredential =>
-          someCredential.settlerType === cred.settlerType
-      )
-      .filter(
-        someCredential =>
-          settlementModule.uniqueId(someCredential) === credentialId
-      )[0]
-    if (existingCredential) {
-      await settlementModule.closeCredential(readyCredential)
-      readyCredential = existingCredential
-    } else {
-      state.credentials.push(readyCredential)
-    }
-
-    const authToken = await generateToken()
-    const createServerUri = settler.remoteConnectors['Kava Labs']
-    const serverUri = createServerUri(authToken)
-    // const serverUriNoToken = createServerUri('')
-
-    const alreadyExists = state.uplinks.some(
-      uplink =>
-        uplink.settlerType === cred.settlerType &&
-        uplink.credentialId === credentialId &&
-        false
-      // TODO Add back serverUri check (must exist on uplink)
-      // serverUriNoToken === uplink.serverUri
+  const add = async (
+    credentialConfig: ValidatedCredentials
+  ): Promise<ReadyUplinks> => {
+    // TODO Is this necessary if I'm not using the settler directly?
+    const [settler, stateWithSettler] = await getOrCreateEngine(
+      state,
+      credentialConfig.settlerType
     )
-    if (alreadyExists) {
-      throw new Error('Cannot create duplicate uplink')
-    }
-
-    const config: BaseUplinkConfig = {
-      // settlerType: SettlementEngineType.Lnd,
-      settlerType, // TODO!
-      stream: {
-        serverSecret: await generateSecret()
-      },
-      plugin: {
-        btp: {
-          serverUri,
-          authToken
-        },
-        store: {}
-      }
-    }
-
-    const baseUplink = await settlementModule.connectUplink(state)(
-      readyCredential
-    )(config)
-    const uplink = await connectUplink(state)(baseUplink)(config)
-    state.uplinks.push(uplink)
-
-    return uplink
+    const [readyCredential, stateWithCredential] = await getOrCreateCredential(
+      stateWithSettler
+    )(credentialConfig)
+    const [readyUplink, stateWithUplink] = await createUplink(
+      stateWithCredential
+    )(readyCredential)
+    state = stateWithUplink
+    return readyUplink
   }
 
   const deposit = async ({
@@ -278,28 +120,9 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     amount: BigNumber
     authorize: AuthorizeDeposit
   }): Promise<void> => {
-    // Find the uplink in the internal state by its credentialId
-    const internalUplink = state.uplinks.filter(
-      someUplink =>
-        someUplink.credentialId === uplink.credentialId &&
-        someUplink.settlerType === uplink.settlerType
-    )[0]
-    if (!internalUplink) {
-      return
-    }
-
-    const internalDeposit = (() => {
-      switch (internalUplink.settlerType) {
-        case SettlementEngineType.Lnd:
-          return
-        case SettlementEngineType.XrpPaychan:
-          return XrpPaychan.deposit(internalUplink)
-      }
-    })()
-
-    if (internalDeposit) {
-      await internalDeposit(state)(opts)
-    }
+    const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
+    const internalDeposit = depositToUplink(internalUplink)
+    return internalDeposit && internalDeposit(state)(opts)
   }
 
   const withdraw = async ({
@@ -309,76 +132,36 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     uplink: ReadyUplinks
     authorize: AuthorizeWithdrawal
   }) => {
-    // TODO
-    const internalUplink = state.uplinks.filter(findUplinkPredicate(uplink))[0]
-    if (!internalUplink) {
-      return
-    }
-
-    const internalWithdraw = (() => {
-      switch (internalUplink.settlerType) {
-        case SettlementEngineType.Lnd:
-          return
-        case SettlementEngineType.XrpPaychan:
-          return XrpPaychan.withdraw(internalUplink)
-      }
-    })()
-
-    if (internalWithdraw) {
-      await internalWithdraw(state)(authorize)
-    }
+    const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
+    const internalWithdraw = withdrawFromUplink(internalUplink)
+    return internalWithdraw && internalWithdraw(state)(authorize)
   }
 
   // TODO Create a composite "id" for uplinks based on serverUri, settlerType & credentialId?
 
-  const findUplinkPredicate = (uplink: ReadyUplinks) => (
-    someUplink: ReadyUplinks
-  ) =>
-    someUplink.credentialId === uplink.credentialId &&
-    someUplink.settlerType === uplink.settlerType
-
-  const findCredentialPredicate = (credentialId: string) => (
-    someCredential: ReadyCredentials
-  ) => someCredential.settlerType === credential.settlerType
-  // TODO TODO TODO Also check that the id of the credential is correct!
-
   const remove = async (uplink: ReadyUplinks) => {
-    const internalUplink = state.uplinks.filter(findUplinkPredicate(uplink))[0]
+    // Remove the uplink
+    const internalUplink = state.uplinks.find(isThatUplink(uplink))
     if (!internalUplink) {
       return
     }
-
-    // Remove the uplink
     await closeUplink(internalUplink)
-    state.uplinks = state.uplinks.filter(findUplinkPredicate(uplink))
+    state = {
+      ...state,
+      uplinks: state.uplinks.filter(el => !isThatUplink(uplink)(el))
+    }
 
     // Remove the credential
-    // TODO Abstract this!
-    const internalCredential = state.credentials.filter(
-      findCredentialPredicate(internalUplink.credentialId)
-    )[0]
-    await closeCredential(internalCredential)
+    const credentials = state.credentials.filter(
+      isThatCredentialId(internalUplink.credentialId, uplink.settlerType)
+    )
+    await Promise.all(credentials.map(closeCredential))
+    state = {
+      ...state,
+      credentials // TODO This should be the opposite of credentials -- use partition instead?
+    }
 
     // TODO Close engine, if there aren't any other credentials that rely on it
-  }
-
-  const closeCredential = (credential: ReadyCredentials) => {
-    switch (credential.settlerType) {
-      case SettlementEngineType.Lnd:
-        return Lnd.closeCredential(credential)
-      case SettlementEngineType.XrpPaychan:
-        return XrpPaychan.closeCredential(credential)
-    }
-  }
-
-  // TODO Add "closeEngine" to specific settlement modules
-  const closeEngine = (settler: SettlementEngines) => {
-    switch (settler.settlerType) {
-      case SettlementEngineType.Lnd:
-        return
-      case SettlementEngineType.XrpPaychan:
-        return
-    }
   }
 
   const disconnect = async () => {
@@ -386,23 +169,20 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     await Promise.all(state.credentials.map(closeCredential))
     await Promise.all(
       Object.values(state.settlers)
-        .filter((engine): engine is SettlementEngines => !!engine)
+        .filter((a): a is SettlementEngines => !!a) // TODO !
         .map(closeEngine)
     )
   }
 
   // TODO Should disconnecting the API prevent other operations from occuring?
 
-  // TODO Export deposit, withdrawal, switch (etc)
-
   return {
     state,
-    // TODO add & deposit; withdraw & remove are not bundled -- they can be invoked together from the front-end
     add,
     deposit,
     withdraw,
     remove,
-    switch: streamMoney(state),
+    streamMoney: streamMoney(state),
     disconnect
   }
 }
@@ -413,33 +193,14 @@ export enum LedgerEnv {
   Local = 'local'
 }
 
-export interface ValidatedCredential {
-  settlerType: SettlementEngineType
-}
-
-export type ValidatedCredentials = (
-  | ValidatedLndCredential
-  | ValidatedXrpSecret) &
-  ValidatedCredential
-
-export interface ReadyCredential {
-  settlerType: SettlementEngineType // TODO
-}
-
-// TODO This needs to be a discriminated union in order to work correctly (e.g. settlerType within)
-export type ReadyCredentials = (
-  | ReadyLndCredential
-  // | Machinomy.ReadyEthereumCredential
-  | ReadyXrpCredential) &
-  ReadyCredential
-
 export interface State {
   readonly ledgerEnv: LedgerEnv
   readonly rateBackend: RateApi
   readonly maxInFlightUsd: AssetUnit
+  // TODO Is this simpler as an array and filter? Hard to get the types right
   settlers: {
-    [SettlementEngineType.Lnd]?: LndSettlementEngine
-    [SettlementEngineType.XrpPaychan]?: XrpPaychanSettlementEngine
+    lnd?: LndSettlementEngine
+    'xrp-paychan'?: XrpPaychanSettlementEngine
   }
   credentials: ReadyCredentials[]
   uplinks: ReadyUplinks[]

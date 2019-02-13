@@ -11,24 +11,22 @@ import { MemoryStore } from '../../utils/store'
 import createLogger from '../../utils/log'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { PluginWrapper } from '../../utils/middlewares'
-import { SettlementEngine, SettlementEngineType } from '../'
-import { LedgerEnv, State, SettlementModule, DepositableModule } from '../..'
+import { SettlementEngine, SettlementEngineType } from '../../engine'
+import { LedgerEnv, State, SettlementModule } from '../..'
 import {
-  UplinkConfig,
-  // getPluginMaxPacketAmount,
-  // getPluginBalanceConfig,
-  getNativeMaxInFlight,
   AuthorizeDeposit,
   AuthorizeWithdrawal,
   BaseUplinkConfig,
   BaseUplink,
-  ReadyUplink,
-  distinctBigNum
+  distinctBigNum,
+  ReadyUplink
 } from '../../uplink'
 import { Observable, BehaviorSubject, Subject, combineLatest } from 'rxjs'
 import { Flavor } from 'types/util'
 import { map, filter } from 'rxjs/operators'
-import { DepositPreauthLedgerEntry } from 'ripple-lib/dist/npm/common/types/objects'
+import { isThatCredentialId } from '../../credential'
+
+const log = createLogger('switch-api:xrp-paychan')
 
 /**
  * ------------------------------------
@@ -137,15 +135,16 @@ export interface XrpPaychanUplinkConfig extends BaseUplinkConfig {
 export interface XrpPaychanBaseUplink extends BaseUplink {
   settlerType: SettlementEngineType.XrpPaychan
   credentialId: ValidatedXrpAddress
-  plugin: PluginWrapper
+  plugin: PluginWrapper // TODO Fix this/remove balance wrapper from here
   xrpPlugin: any // TODO !
 }
 
+// TODO 'ReadyUplink' doesn't exsit!
 export type ReadyXrpPaychanUplink = XrpPaychanBaseUplink & ReadyUplink
 
-const connectUplink = (state: State) => (
-  credential: ReadyXrpCredential
-) => async (config: XrpPaychanUplinkConfig): Promise<XrpPaychanBaseUplink> => {
+const connectUplink = (credential: ReadyXrpCredential) => (
+  state: State
+) => async (config: BaseUplinkConfig): Promise<XrpPaychanBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
@@ -413,7 +412,7 @@ export interface XrpPaychanSettlementModule
 
 // TODO Rename this?
 export const XrpPaychan: XrpPaychanSettlementModule = {
-  settlerType: SettlementEngineType.XrpPaychan,
+  // settlerType: SettlementEngineType.XrpPaychan,
   setupEngine,
   setupCredential,
   uniqueId,

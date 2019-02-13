@@ -13,18 +13,25 @@ import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
 import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
-import { getOrCreateSettler, State } from '.'
+import { State } from '.'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
-import { SettlementEngine, SettlementEngineType } from './settlement'
-import { LndBaseUplink, LndUplinkConfig } from './settlement/lnd/lnd'
+import {
+  SettlementEngine,
+  SettlementEngineType,
+  getOrCreateEngine
+} from './engine'
+import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd/lnd'
 import {
   XrpPaychanBaseUplink,
-  XrpPaychanUplinkConfig
+  XrpPaychanUplinkConfig,
+  XrpPaychan
 } from './settlement/xrp-paychan/xrp-paychan'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
-import { PluginWrapper } from 'utils/middlewares'
+import { PluginWrapper } from './utils/middlewares'
+import { ReadyCredentials, getCredentialId } from './credential'
+import { generateSecret, generateToken } from './utils/crypto'
 
 const log = createLogger('switch-api:uplink')
 
@@ -97,10 +104,86 @@ export interface ReadyUplink {
 
 export type ReadyUplinks = ReadyUplink & BaseUplinks
 
-export const connectUplink = (state: State) => (uplink: BaseUplinks) => async (
-  config: BaseUplinkConfig
-): Promise<ReadyUplinks> => {
-  const settler = await getOrCreateSettler(state, config.settlerType)
+/**
+ * ------------------------------------
+ * GETTING UPLINKS
+ * ------------------------------------
+ */
+
+// TODO This also MUST check what connector it's connected to! (fix that)
+export const isThatUplink = (uplink: ReadyUplinks) => (
+  someUplink: ReadyUplinks
+) =>
+  someUplink.credentialId === uplink.credentialId &&
+  someUplink.settlerType === uplink.settlerType
+
+/**
+ * ------------------------------------
+ * ADDING & CONNECTING UPLINKS
+ * ------------------------------------
+ */
+
+export const createUplink = (state: State) => async (
+  readyCredential: ReadyCredentials
+): Promise<[ReadyUplinks, State]> => {
+  const authToken = await generateToken()
+  const [settler, _] = await getOrCreateEngine(
+    state,
+    readyCredential.settlerType
+  ) // TODO Update state!
+  const createServerUri = settler.remoteConnectors['Kava Labs']
+  const serverUri = createServerUri(authToken)
+  // const serverUriNoToken = createServerUri('') // TODO !
+
+  const credentialId = getCredentialId(readyCredential)
+  const alreadyExists = state.uplinks.some(
+    someUplink =>
+      someUplink.credentialId === credentialId &&
+      someUplink.settlerType === readyCredential.settlerType &&
+      false // TODO This MUST comapre the connector it's connected to!
+  )
+  if (alreadyExists) {
+    throw new Error('Cannot create duplicate uplink')
+  }
+
+  const config: BaseUplinkConfig = {
+    settlerType: readyCredential.settlerType,
+    stream: {
+      serverSecret: await generateSecret()
+    },
+    plugin: {
+      btp: {
+        serverUri,
+        authToken
+      },
+      store: {}
+    }
+  }
+
+  const uplink = await connectUplink(state)(readyCredential)(config)
+  return [
+    uplink,
+    {
+      ...state,
+      uplinks: [...state.uplinks, uplink]
+    }
+  ]
+}
+
+export const connectBaseUplink = (credential: ReadyCredentials) => {
+  switch (credential.settlerType) {
+    case SettlementEngineType.Lnd:
+      return Lnd.connectUplink(credential)
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.connectUplink(credential)
+  }
+}
+
+export const connectUplink = (state: State) => (
+  credential: ReadyCredentials
+) => async (config: BaseUplinkConfig): Promise<ReadyUplinks> => {
+  const uplink = await connectBaseUplink(credential)(state)(config)
+  const [settler, _] = await getOrCreateEngine(state, config.settlerType) // TODO Update state!
   const {
     plugin,
     outgoingCapacity$,
@@ -245,10 +328,10 @@ const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
  * and prefund the value of the packet (assumes peer credit limit is 0)
  */
 export const sendPacket = async (
-  uplink: ReadyUplink,
+  uplink: ReadyUplinks,
   prepare: IlpPrepare
 ): Promise<IlpReply> => {
-  const additionalPrefundRequired = uplink.pluginWrapper.payableBalance$.value.minus(
+  const additionalPrefundRequired = uplink.pluginWrapper.payableBalance$.value.plus(
     prepare.amount
   )
 
@@ -268,7 +351,7 @@ export const sendPacket = async (
  * EFFECT: changes data handler on internal plugin
  */
 export const registerPacketHandler = (handler: IlpPrepareHandler) => (
-  uplink: ReadyUplink
+  uplink: ReadyUplinks
 ) => {
   uplink.streamClientHandler = handler
 }
@@ -283,7 +366,7 @@ export const getNativeMaxInFlight = async (
   settlerType: SettlementEngineType
 ): Promise<BigNumber> => {
   const { maxInFlightUsd, rateBackend } = state
-  const { baseUnit } = await getOrCreateSettler(state, settlerType)
+  const [{ baseUnit }, _] = await getOrCreateEngine(state, settlerType) // TODO Update state!
   return convert(maxInFlightUsd, baseUnit(), rateBackend).dp(
     0,
     BigNumber.ROUND_DOWN
@@ -309,6 +392,24 @@ export type AuthorizeWithdrawal = (params: {
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
   fee: BigNumber
 }) => Promise<boolean>
+
+export const depositToUplink = (uplink: ReadyUplinks) => {
+  switch (uplink.settlerType) {
+    case SettlementEngineType.Lnd:
+      return
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.deposit(uplink)
+  }
+}
+
+export const withdrawFromUplink = (uplink: ReadyUplinks) => {
+  switch (uplink.settlerType) {
+    case SettlementEngineType.Lnd:
+      return
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.withdraw(uplink)
+  }
+}
 
 /**
  * ------------------------------------

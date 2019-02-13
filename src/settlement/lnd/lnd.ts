@@ -1,36 +1,34 @@
 import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
-import { State, LedgerEnv, getSettler, SettlementModule } from '../..'
 import BigNumber from 'bignumber.js'
-import { fromNullable, Option, tryCatch } from 'fp-ts/lib/Option'
+import { Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
   ChannelBalanceRequest,
   connectLnd,
   createInvoiceStream,
   createPaymentStream,
   GetInfoRequest,
-  LndService,
-  waitForReady,
   Invoice,
-  SendResponse,
+  InvoiceStream,
+  LndService,
   PaymentStream,
-  InvoiceStream
+  SendResponse,
+  waitForReady
 } from 'ilp-plugin-lightning'
-import { BehaviorSubject, merge, from, interval, fromEvent } from 'rxjs'
-import { map, mergeMap, throttleTime, filter, sample } from 'rxjs/operators'
+import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
+import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
-import { SettlementEngine, SettlementEngineType } from '..'
+import { LedgerEnv, SettlementModule, State } from '../..'
+import { SettlementEngine, SettlementEngineType } from '../../engine'
+import { Flavor } from '../../types/util'
 import {
-  getNativeMaxInFlight,
-  getPluginBalanceConfig,
-  getPluginMaxPacketAmount,
-  distinctBigNum,
   BaseUplink,
-  ReadyUplink,
-  BaseUplinkConfig
+  BaseUplinkConfig,
+  distinctBigNum,
+  getNativeMaxInFlight,
+  ReadyUplink
 } from '../../uplink'
 import createLogger from '../../utils/log'
 import { MemoryStore } from '../../utils/store'
-import { Flavor } from '../../types/util'
 
 /*
  * ------------------------------------
@@ -119,21 +117,8 @@ const fetchChannelBalance = async (lightning: LndService) => {
   return convert(satoshi(res.getBalance()), btc())
 }
 
-// TODO Is this used outside of "getCredential" ?
 const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
   cred.identityPublicKey
-
-const getCredential = (
-  state: State,
-  credentialId: LndIdentityPublicKey
-): Option<ReadyLndCredential> =>
-  fromNullable(
-    state.credentials.filter(
-      (cred): cred is ReadyLndCredential =>
-        cred.settlerType === SettlementEngineType.Lnd &&
-        uniqueId(cred) === credentialId
-    )[0]
-  )
 
 const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
   ReadyLndCredential
@@ -197,22 +182,22 @@ export interface LndBaseUplink extends BaseUplink {
   credentialId: LndIdentityPublicKey
 }
 
-export type ReadyLndUplink = LndBaseUplink & ReadyUplink
+export type ReadyLndUplink = LndBaseUplink & ReadyUplink // TODO 'ReadyUplink' doesn't exist!
 
-const connectUplink = (state: State) => (
-  credential: ReadyLndCredential
-) => async (config: LndUplinkConfig): Promise<LndBaseUplink> => {
+// TODO Is the base config fine?
+const connectUplink = (credential: ReadyLndCredential) => (
+  state: State
+) => async (config: BaseUplinkConfig): Promise<LndBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  // const settler = getSettler(state)(SettlementEngineType.Lnd)! // TODO "getSettler" should automatically create the uplink
-
   // TODO Remove this?
-  const maxInFlight = getNativeMaxInFlight(state, SettlementEngineType.Lnd)
-  const maxPacketAmount = getPluginMaxPacketAmount(maxInFlight)
-  const balance = getPluginBalanceConfig(maxInFlight)
-
   // TODO Remove balance from lightning plugin?
+  const maxInFlight = await getNativeMaxInFlight(
+    state,
+    SettlementEngineType.Lnd
+  )
+
   const plugin = new LightningPlugin(
     {
       role: 'client',
@@ -224,8 +209,13 @@ const connectUplink = (state: State) => (
       lnd: credential.service,
       paymentStream: credential.paymentStream,
       invoiceStream: credential.invoiceStream,
-      maxPacketAmount,
-      balance
+      // TODO Remove balance
+      maxPacketAmount: maxInFlight.toString(),
+      balance: {
+        maximum: maxInFlight.times(2).toString(),
+        settleTo: maxInFlight.toString(),
+        settleThreshold: '0'
+      }
     },
     {
       log: createLogger('ilp-plugin-lightning'),
@@ -234,7 +224,7 @@ const connectUplink = (state: State) => (
   )
 
   // TODO Remove this abstraction... yuck!
-  // const account = await plugin.loadAccount('peer')
+  const account = await plugin.loadAccount('peer')
 
   const outgoingCapacity$ = credential.channelBalance$
   const incomingCapacity$ = new BehaviorSubject(new BigNumber(Infinity))
@@ -268,9 +258,8 @@ export type LndSettlementModule = SettlementModule<
   ReadyLndUplink
 >
 
-// TODO Rename this?
 export const Lnd: LndSettlementModule = {
-  settlerType: SettlementEngineType.Lnd,
+  // settlerType: SettlementEngineType.Lnd,
   setupEngine,
   setupCredential,
   uniqueId,
