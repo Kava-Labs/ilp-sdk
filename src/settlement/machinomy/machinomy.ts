@@ -1,31 +1,27 @@
 import { convert, eth, gwei, usd, wei } from '@kava-labs/crypto-rate-utils'
-import { ApiUtils } from 'api'
 import BigNumber from 'bignumber.js'
 import { isValidPrivate, privateToAddress, toBuffer } from 'ethereumjs-util'
-import EthereumPlugin from 'ilp-plugin-ethereum'
-import EthereumAccount, { AccountData } from 'ilp-plugin-ethereum/build/account'
-import {
-  remainingInChannel,
-  spentFromChannel
-} from 'ilp-plugin-ethereum/build/utils/contract'
+import EthereumPlugin, { AccountData } from 'ilp-plugin-ethereum'
 import {
   AuthorizeDeposit,
   AuthorizeWithdrawal,
-  interledgerBalance,
-  NewUplink,
-  UplinkConfig,
-  getNativeMaxInFlight,
-  getPluginBalanceConfig,
-  getPluginMaxPacketAmount
-} from 'uplink'
-import { Just, Maybe, Nothing } from 'purify-ts/adts/Maybe'
-import { MemoryStore } from 'utils/store'
-import { streamMoney } from 'utils/switch'
+  ReadyUplink,
+  BaseUplinkConfig,
+  BaseUplink,
+  distinctBigNum
+} from '../../uplink'
+import { MemoryStore } from '../../utils/store'
+import { streamMoney } from '../../services/switch'
 import Web3 from 'web3'
 import { HttpProvider } from 'web3/providers'
 import createLogger from '../../utils/log'
-import { SettlementEngine, SettlementEngineType } from '..'
+import { SettlementEngine, SettlementEngineType } from '../../engine'
 import { fetchGasPrice } from '../shared/eth'
+import { LedgerEnv, State, SettlementModule } from '../..'
+import { Option, some, none } from 'fp-ts/lib/Option'
+import { Brand } from '../../types/util'
+import { Subject, BehaviorSubject } from 'rxjs'
+import { map } from 'rxjs/operators'
 
 /**
  * ------------------------------------
@@ -37,17 +33,21 @@ export interface MachinomySettlementEngine extends SettlementEngine {
   ethereumProvider: HttpProvider
 }
 
-export const setupEngine = (utils: ApiUtils): MachinomySettlementEngine => {
-  const network = utils.ledgerEnv === 'mainnet' ? 'mainnet' : 'kovan'
+export const setupEngine = async (
+  ledgerEnv: LedgerEnv
+): Promise<MachinomySettlementEngine> => {
+  const network = ledgerEnv === 'mainnet' ? 'mainnet' : 'kovan'
   const ethereumProvider = new Web3.providers.HttpProvider(
     `https://${network}.infura.io/v3/92e263da65ac4703bf99df7828c6beca`
-  ) /** Disconnect is a no-op on the HTTP provider */
-  // TODO ^ Does the Web3 provider even perform any block polling?
-  //        Or can I just ...?
+  )
+
+  // TODO Does the Web3 provider even perform any block polling/are multiple instances bad?
 
   // TODO Download and run a Parity light client here?
 
   return {
+    settlerType: SettlementEngineType.Machinomy,
+
     assetCode: 'ETH',
     assetScale: 9,
     baseUnit: gwei,
@@ -63,12 +63,10 @@ export const setupEngine = (utils: ApiUtils): MachinomySettlementEngine => {
       mainnet: {
         'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/eth`
       }
-    },
+    }[ledgerEnv],
     ethereumProvider
   }
 }
-
-// TODO These can likely be generic and then passed into the "createUplink" method
 
 /**
  * ------------------------------------
@@ -76,40 +74,52 @@ export const setupEngine = (utils: ApiUtils): MachinomySettlementEngine => {
  * ------------------------------------
  */
 
-type Brand<K, T> = K & { __brand: T } // TODO Use that "newtypes" library or whatever it's called
-export type ValidatedEthereumPrivateKey = Brand<string, 'ValidEthPrivateKey'>
-
-export const validate = (
+export interface ValidatedEthereumPrivateKey {
+  settlerType: SettlementEngineType.Machinomy
   privateKey: string
-): Maybe<ValidatedEthereumPrivateKey> => {
-  // Requires a 0x in front to validate private key, so prepend it if it's missing
-  // (Web3 also throws an obscure error if not)
-  if (!privateKey.startsWith('0x')) {
-    privateKey = '0x' + privateKey
-  }
-
-  return isValidPrivate(toBuffer(privateKey))
-    ? Just(privateKey as ValidatedEthereumPrivateKey)
-    : Nothing
 }
+
+// TODO Add this to setupCredential!
+// export const validate = (
+//   privateKey: string
+// ): Option<ValidatedEthereumPrivateKey> => {
+//   // Requires a 0x in front to validate private key, so prepend it if it's missing
+//   // (Web3 also throws an obscure error if not)
+
+//   return isValidPrivate(toBuffer(privateKey))
+//     ? some({
+//         settlerType: SettlementEngineType.Machinomy,
+//         privateKey
+//       })
+//     : none
+// }
 
 export type ReadyEthereumCredential = {
   settlerType: SettlementEngineType.Machinomy
-
   privateKey: string
   address: string
 }
 
-export const setupCredential = (
-  privateKey: ValidatedEthereumPrivateKey
-): ReadyEthereumCredential => ({
+export const setupCredential = ({
   privateKey,
-  address: '0x' + privateToAddress(toBuffer(privateKey)).toString('hex')
-})
+  settlerType
+}: ValidatedEthereumPrivateKey) => async (): Promise<
+  ReadyEthereumCredential
+> => {
+  if (!privateKey.startsWith('0x')) {
+    privateKey = '0x' + privateKey
+  }
 
-// TODO Does the unique id need to be generated from the
-//      validated credential, or the ready credential?
-export const uniqueId = (cred: ValidatedEthereumPrivateKey) => cred
+  return {
+    settlerType,
+    privateKey,
+    address: '0x' + privateToAddress(toBuffer(privateKey)).toString('hex')
+  }
+}
+
+export const uniqueId = (cred: ReadyEthereumCredential) => cred.address
+
+export const closeCredential = () => Promise.resolve()
 
 /**
  * ------------------------------------
@@ -117,106 +127,134 @@ export const uniqueId = (cred: ValidatedEthereumPrivateKey) => cred
  * ------------------------------------
  */
 
-// TODO Move all the Ethereum-based credentials to their own config,
-//      since they can be abstracted
-
-export interface MachinomyUplinkConfig {
+export interface MachinomyUplinkConfig extends BaseUplinkConfig {
   settlerType: SettlementEngineType.Machinomy
   credential: ValidatedEthereumPrivateKey
 }
 
-export interface OnlyMachinomy {
+export interface MachinomyBaseUplink extends BaseUplink {
   plugin: EthereumPlugin
   settlerType: SettlementEngineType.Machinomy
-  // credentialId: string // TODO This can be abstracted to "NewUplink" !
-  // TODO ^ since lookups only require (settlerType & credentialId)
+  pluginAccount$: Subject<AccountData>
 }
 
-export type MachinomyUplink = OnlyMachinomy & NewUplink
+export type ReadyMachinomyUplink = MachinomyBaseUplink & ReadyUplink
 
-/* prettier-ignore */
-export type ConnectMachinomyUplink =
-  (utils: ApiUtils) =>
-  (settler: MachinomySettlementEngine) =>
-  (credential: ReadyEthereumCredential) =>
-  (config: UplinkConfig & MachinomyUplinkConfig) =>
-  OnlyMachinomy
-
-export const connectUplink: ConnectMachinomyUplink = utils => settler => credential => config => {
+export const connectUplink = (credential: ReadyEthereumCredential) => (
+  state: State
+) => async (config: BaseUplinkConfig): Promise<MachinomyBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
   const { privateKey: ethereumPrivateKey } = credential
+  const settler = state.settlers[
+    credential.settlerType
+  ]
   const { ethereumProvider } = settler
 
-  const maxInFlight = getNativeMaxInFlight(utils, settler)
-  const getGasPrice = () => fetchGasPrice(utils)(settler)
+  const getGasPrice = () => fetchGasPrice(state)(settler)
+
+  const pluginAccount$ = new Subject<AccountData>()
+  const storeProxy = new Proxy(store, {
+    set: (target, key, val) => {
+      if (key === 'account') {
+        pluginAccount$.next(JSON.parse(val))
+      }
+
+      return Reflect.set(target, key, val)
+    }
+  })
 
   const plugin = new EthereumPlugin(
     {
-      role: 'client',
       server,
       ethereumPrivateKey,
       ethereumProvider,
-      balance: getPluginBalanceConfig(maxInFlight),
-      maxPacketAmount: getPluginMaxPacketAmount(maxInFlight),
-      getGasPrice /* Only used for channel watcher to settle channels */
+      getGasPrice
     },
     {
-      store: new MemoryStore(store),
+      store: new MemoryStore(storeProxy),
       log: createLogger('ilp-plugin-ethereum')
     }
   )
 
+  // TODO Updates to outgoingChannelCache may not trigger updates here, which is bad!
+
+  const totalSent$ = new BehaviorSubject(new BigNumber(0))
+  pluginAccount$
+    .pipe(
+      map(
+        account =>
+          new BigNumber(
+            account.bestOutgoingClaim ? account.bestOutgoingClaim.value : 0
+          )
+      ),
+      distinctBigNum,
+      map(value => convert(wei(value), eth()))
+    )
+    .subscribe(totalSent$)
+
+  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  pluginAccount$
+    .pipe(
+      map(account =>
+        account.outgoingChannelId
+          ? plugin.channelCache[account.outgoingChannelId]
+            ? plugin.channelCache[account.outgoingChannelId].value.minus(
+                account.bestOutgoingClaim
+                  ? account.bestOutgoingClaim.value
+                  : new BigNumber(0)
+              )
+            : new BigNumber(0)
+          : new BigNumber(0)
+      ),
+      distinctBigNum,
+      map(value => convert(wei(value), eth()))
+    )
+    .subscribe(outgoingCapacity$)
+
+  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
+  pluginAccount$
+    .pipe(
+      map(
+        account =>
+          new BigNumber(
+            account.bestIncomingClaim ? account.bestIncomingClaim.value : 0
+          )
+      ),
+      distinctBigNum,
+      map(value => convert(wei(value), eth()))
+    )
+    .subscribe(totalReceived$)
+
+  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  pluginAccount$
+    .pipe(
+      map(account =>
+        account.bestIncomingClaim
+          ? plugin.channelCache[account.bestIncomingClaim.channelId]
+            ? plugin.channelCache[
+                account.bestIncomingClaim.channelId
+              ].value.minus(account.bestIncomingClaim.value)
+            : new BigNumber(0)
+          : new BigNumber(0)
+      ),
+      distinctBigNum,
+      map(value => convert(wei(value), eth()))
+    )
+    .subscribe(outgoingCapacity$)
+
   return {
     settlerType: SettlementEngineType.Machinomy,
+    credentialId: uniqueId(credential),
+    outgoingCapacity$,
+    incomingCapacity$,
+    totalReceived$,
+    totalSent$,
+    pluginAccount$,
     plugin
   }
 }
-
-/**
- * Generic utils for Ethereum
- */
-
-// TODO Neither of these helpers should be necessary if the eth plugin is refactored
-
-/** Lookup the internal plugin account from the given uplink */
-const getAccount = (uplink: MachinomyUplink): Maybe<EthereumAccount> =>
-  Maybe.fromNullable(uplink.plugin._accounts.get('peer'))
-
-/**
- * Lookup the internal plugin account, and use the given getter to
- * fetch a balance from it, defaulting to 0 if the account doesn't exist
- */
-const mapAccountBalance = (
-  uplink: MachinomyUplink,
-  mapper: (account: AccountData) => BigNumber
-) =>
-  getAccount(uplink)
-    .map(({ account }) => mapper(account))
-    .orDefault(new BigNumber(0))
-
-/**
- * Balance-related getters
- */
-
-export const availableToReceive = (uplink: MachinomyUplink) =>
-  mapAccountBalance(uplink, account =>
-    convert(wei(remainingInChannel(account.incoming)), eth())
-  )
-
-export const availableToSend = (uplink: MachinomyUplink) =>
-  mapAccountBalance(uplink, account =>
-    convert(wei(remainingInChannel(account.outgoing)), eth())
-  )
-
-export const totalReceived = (uplink: MachinomyUplink) =>
-  mapAccountBalance(uplink, account =>
-    convert(wei(spentFromChannel(account.incoming)), eth())
-  )
-
-export const availableToDebit = (uplink: MachinomyUplink) =>
-  mapAccountBalance(uplink, account => convert(gwei(account.balance), eth()))
 
 export const baseLayerBalance = async (
   settler: MachinomySettlementEngine,
@@ -230,110 +268,88 @@ export const baseLayerBalance = async (
   return convert(wei(balanceWei), eth())
 }
 
-/**
- * Moving between layer 1 <-> layer 2
- */
-
-// TODO Update the eth plugin & confirm all units are correct.
-export const deposit = (utils: ApiUtils) => (
-  settler: MachinomySettlementEngine
-) => (credential: ReadyEthereumCredential) => (
-  uplink: MachinomyUplink
-) => async ({
-  amount = convert(usd(10), eth(), utils.rateBackend),
+export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
+  amount,
   authorize
 }: {
-  amount?: BigNumber
+  amount: BigNumber
   authorize: AuthorizeDeposit
 }) => {
-  const gasPriceWei = new BigNumber(await fetchGasPrice(utils)(settler))
   const fundAmountWei = convert(eth(amount), wei())
 
-  const pluginAccount = getAccount(uplink).extract()
-  if (!pluginAccount) {
-    // TODO Log the error? This shouldn't really ever occur
-    return
-  }
+  await uplink.plugin.fundOutgoingChannel(fundAmountWei, async fee => {
+    // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
 
-  const web3 = new Web3(settler.ethereumProvider)
-  // TODO Make sure "gas" is available
-
-  const internalAuthorize = async (gas: BigNumber): Promise<boolean> => {
-    const txFeeWei = gasPriceWei.times(gas)
-    const balanceEth = await baseLayerBalance(settler, credential)
-    const balanceWei = convert(eth(balanceEth), wei())
-
-    const totalAmountWei = fundAmountWei.plus(txFeeWei)
-    const insufficientFunds = totalAmountWei.gt(balanceWei)
-    if (insufficientFunds) {
-      throw new InsufficientFundsError()
-    }
-
-    return authorize({
-      fee: convert(wei(txFeeWei), eth()) /** eth */,
-      value: amount /** eth */
+    await authorize({
+      value: amount,
+      fee: convert(wei(fee), eth())
     })
-  }
-
-  // TODO Implement this open new channel/deposit to channel logic in the eth plugin itself. Simpler.
-  const fundChannel = !pluginAccount.account.outgoing
-    ? pluginAccount.openChannel
-    : pluginAccount.depositToChannel
-  await fundChannel({
-    amount: fundAmountWei,
-    gasPrice: gasPriceWei.toNumber(),
-    authorize: internalAuthorize
   })
 
-  // Stream 1 packet to self to open incoming capacity
-  // Don't await in case this resolves *after* the money comes in
-  streamMoney({
-    amount: new BigNumber(1) /** gwei */,
-    source: uplink,
-    dest: uplink
-  })
+  // TODO This is a hack to get the balance to update -- fix this
+  uplink.pluginAccount$.next(uplink.plugin.account)
 
-  // TODO How to catch errors here? If "poor exchange rate," best way to handle that?
-
+  // TODO Add functionality to request/get incoming capacity!
   // TODO Watch "availableToReceive" -- when that becomes > 0
   //      (subject to some timeout, of course)
 }
 
-// TODO Stream funds off the connector BEFORE the actual withdrawal
-
-const withdraw = (utils: ApiUtils) => (settler: MachinomySettlementEngine) => (
-  credential: ReadyEthereumCredential
-) => (uplink: MachinomyUplink) => async ({
-  authorize
-}: {
+const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
   authorize: AuthorizeWithdrawal
-}) => {
-  const gasPrice = await fetchGasPrice(utils)(settler)
-  const { gas, claim, approve, deny } = await pluginAccount.claimChannel(
-    gasPrice
-  )
-  const bestIncomingClaim = claim.value
-  const txFeeWei = new BigNumber(gasPrice).times(gas)
-
-  // TODO make sure units are correct !
-
-  const shouldContinue = await authorize({
-    fee: convert(wei(txFeeWei), eth()) /** eth */,
-    value: interledgerBalance(uplink) /** eth */
+) => {
+  const claimChannel = uplink.plugin.claimIfProfitable(false, async fee => {
+    await authorize({
+      // TODO plugin itself should return the value so we know EXACTLY how much will be claimed
+      value: uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value),
+      fee: convert(wei(fee), eth())
+    })
   })
 
-  if (!shouldContinue) {
-    return deny()
-  }
+  const requestClose = uplink.plugin._requestClose()
 
   // Simultaneously withdraw and request incoming capacity to be removed
-  await Promise.all([
-    approve(), // Claim & close incoming channel
-    pluginAccount.requestClose() // Request peer to close outgoing channel
-  ])
+  await Promise.all([claimChannel, requestClose])
 
-  // TODO I'm not sure this is necessary!
-  await plugin.disconnect()
+  // TODO This is a ahck to get the balance to updated
+  uplink.pluginAccount$.next(uplink.plugin.account)
 
-  // TODO Close this account/remove uplink at top level?
+  // TODO Also, confirm the incoming capacity has been closed -- or attempt to dispute it?
+}
+
+/**
+ * ------------------------------------
+ * SETTLEMENT MODULE
+ * ------------------------------------
+ */
+
+export interface MachinomySettlementModule
+  extends SettlementModule<
+    SettlementEngineType.Machinomy,
+    MachinomySettlementEngine,
+    ValidatedEthereumPrivateKey,
+    ReadyEthereumCredential,
+    MachinomyBaseUplink,
+    ReadyMachinomyUplink
+  > {
+  readonly deposit: (
+    uplink: ReadyMachinomyUplink
+  ) => (
+    state: State
+  ) => (opts: {
+    amount: BigNumber
+    authorize: AuthorizeDeposit
+  }) => Promise<void>
+  readonly withdraw: (
+    uplink: ReadyMachinomyUplink
+  ) => (state: State) => (authorize: AuthorizeDeposit) => Promise<void>
+}
+
+export const Machinomy: MachinomySettlementModule = {
+  setupEngine,
+  setupCredential,
+  uniqueId,
+  closeCredential,
+  connectUplink,
+  deposit,
+  withdraw
 }

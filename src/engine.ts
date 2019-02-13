@@ -5,13 +5,14 @@ import {
   XrpPaychanSettlementEngine,
   XrpPaychan
 } from './settlement/xrp-paychan/xrp-paychan'
-import { State } from 'index'
+import { State, LedgerEnv } from '.'
+import { Machinomy } from './settlement/machinomy/machinomy'
 
 export enum SettlementEngineType {
   /** Lightning daeman */
   Lnd = 'lnd',
   /** Machinomy Ethereum unidirectional payment channels */
-  // Machinomy = 'machinomy',
+  Machinomy = 'machinomy',
   /** XRP ledger native payment channels */
   XrpPaychan = 'xrp-paychan'
 }
@@ -44,31 +45,15 @@ export const closeEngine = (settler: SettlementEngines) => {
   }
 }
 
-export const getOrCreateEngine = async (
-  state: State,
+export const createEngine = (ledgerEnv: LedgerEnv) => async (
   settlerType: SettlementEngineType
-): Promise<[SettlementEngines, State]> => {
-  if (state.settlers[settlerType]) {
-    return [state.settlers[settlerType]!, state] // TODO Yuck! fix this
-  }
-
-  const settler = await createEngine(state)(settlerType)
-  const newState = {
-    ...state,
-    settlers: {
-      [settlerType]: settler
-    }
-  }
-  return [settler, newState]
-}
-
-export const createEngine = (state: State) => async (
-  settlerType: SettlementEngineType
-) => {
+): Promise<SettlementEngines> => {
   switch (settlerType) {
     case SettlementEngineType.Lnd:
-      return Lnd.setupEngine(state.ledgerEnv)
+      return Lnd.setupEngine(ledgerEnv)
+    case SettlementEngineType.Machinomy:
+      return Machinomy.setupEngine(ledgerEnv)
     case SettlementEngineType.XrpPaychan:
-      return XrpPaychan.setupEngine(state.ledgerEnv)
+      return XrpPaychan.setupEngine(ledgerEnv)
   }
 }

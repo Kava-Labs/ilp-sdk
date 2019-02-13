@@ -9,15 +9,24 @@ import {
   ReadyXrpCredential,
   XrpPaychan
 } from './settlement/xrp-paychan/xrp-paychan'
-import { State } from 'index'
+import { State } from '.'
+import {
+  Machinomy,
+  ReadyEthereumCredential,
+  ValidatedEthereumPrivateKey
+} from './settlement/machinomy/machinomy'
 
 export type ValidatedCredentials = (
   | ValidatedLndCredential
+  | ValidatedEthereumPrivateKey
   | ValidatedXrpSecret) & {
   settlerType: SettlementEngineType
 }
 
-export type ReadyCredentials = (ReadyLndCredential | ReadyXrpCredential) & {
+export type ReadyCredentials = (
+  | ReadyLndCredential
+  | ReadyEthereumCredential
+  | ReadyXrpCredential) & {
   settlerType: SettlementEngineType
 }
 
@@ -25,6 +34,8 @@ export const setupCredential = (credential: ValidatedCredentials) => {
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.setupCredential(credential)
+    case SettlementEngineType.Machinomy:
+      return Machinomy.setupCredential(credential)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.setupCredential(credential)
   }
@@ -55,6 +66,8 @@ export const getCredentialId = (credential: ReadyCredentials) => {
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.uniqueId(credential)
+    case SettlementEngineType.Machinomy:
+      return Machinomy.uniqueId(credential)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.uniqueId(credential)
   }
@@ -64,6 +77,8 @@ export const closeCredential = (credential: ReadyCredentials) => {
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.closeCredential(credential)
+    case SettlementEngineType.Machinomy:
+      return Machinomy.closeCredential(credential)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.closeCredential(credential)
   }

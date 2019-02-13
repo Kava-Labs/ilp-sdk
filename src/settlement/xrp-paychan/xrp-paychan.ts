@@ -34,8 +34,9 @@ const log = createLogger('switch-api:xrp-paychan')
  * ------------------------------------
  */
 
+// TODO This is atrocious. Eliminate it
 const getSettler = (state: State) =>
-  state.settlers[SettlementEngineType.XrpPaychan]! // TODO Yuck!
+  state.settlers[SettlementEngineType.XrpPaychan]
 
 export interface XrpPaychanSettlementEngine extends SettlementEngine {
   api: RippleAPI
@@ -267,10 +268,6 @@ const connectUplink = (credential: ReadyXrpCredential) => (
     xrpPlugin: pluginProxy,
     outgoingCapacity$,
     incomingCapacity$,
-    // availableToDebit$,
-    // idleAvailableToDebit,
-    // availableToCredit$,
-    // idleAvailableToCredit,
     totalSent$,
     totalReceived$
   }

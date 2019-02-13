@@ -12,7 +12,6 @@ import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
 import { State } from '..'
-import { getOrCreateEngine } from '../engine'
 
 const log = createLogger('switch-api:stream')
 
@@ -52,12 +51,8 @@ export const streamMoney = (state: State) => async ({
    */
   slippage?: BigNumber.Value
 }): Promise<void> => {
-  // TODO The state must be updated with the new settlers!
-  const [sourceSettler, state1] = await getOrCreateEngine(
-    state,
-    source.settlerType
-  )
-  const [destSettler, state2] = await getOrCreateEngine(state, dest.settlerType)
+  const sourceSettler = state.settlers[source.settlerType]
+  const destSettler = state.settlers[dest.settlerType]
 
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),

@@ -20,8 +20,8 @@ import {
   closeEngine,
   SettlementEngineType,
   SettlementEngine,
-  getOrCreateEngine,
-  SettlementEngines
+  SettlementEngines,
+  createEngine
 } from './engine'
 import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd/lnd'
 import {
@@ -37,6 +37,7 @@ import {
   isThatCredentialId,
   ValidatedCredentials
 } from './credential'
+import { MachinomySettlementEngine } from 'settlement/machinomy/machinomy'
 
 export type SettlementModules = LndSettlementModule | XrpPaychanSettlementModule
 
@@ -84,7 +85,18 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
     maxInFlightUsd: usd(0.1),
-    settlers: {},
+    settlers: {
+      // TODO Fix the settlement engine creation ... this is bad
+      [SettlementEngineType.Lnd]: await createEngine(ledgerEnv)(
+        SettlementEngineType.Lnd
+      ),
+      [SettlementEngineType.Machinomy]: (await createEngine(ledgerEnv)(
+        SettlementEngineType.Machinomy
+      )) as MachinomySettlementEngine,
+      [SettlementEngineType.XrpPaychan]: (await createEngine(ledgerEnv)(
+        SettlementEngineType.XrpPaychan
+      )) as XrpPaychanSettlementEngine
+    },
     credentials: [],
     uplinks: []
   }
@@ -98,12 +110,9 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     credentialConfig: ValidatedCredentials
   ): Promise<ReadyUplinks> => {
     // TODO Is this necessary if I'm not using the settler directly?
-    const [settler, stateWithSettler] = await getOrCreateEngine(
-      state,
-      credentialConfig.settlerType
-    )
+    const settler = state.settlers[credentialConfig.settlerType]
     const [readyCredential, stateWithCredential] = await getOrCreateCredential(
-      stateWithSettler
+      state
     )(credentialConfig)
     const [readyUplink, stateWithUplink] = await createUplink(
       stateWithCredential
@@ -199,8 +208,9 @@ export interface State {
   readonly maxInFlightUsd: AssetUnit
   // TODO Is this simpler as an array and filter? Hard to get the types right
   settlers: {
-    lnd?: LndSettlementEngine
-    'xrp-paychan'?: XrpPaychanSettlementEngine
+    [SettlementEngineType.Lnd]: LndSettlementEngine
+    [SettlementEngineType.Machinomy]: MachinomySettlementEngine
+    [SettlementEngineType.XrpPaychan]: XrpPaychanSettlementEngine
   }
   credentials: ReadyCredentials[]
   uplinks: ReadyUplinks[]

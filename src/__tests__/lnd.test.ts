@@ -1,10 +1,4 @@
-import {
-  btc,
-  connectCoinCap,
-  convert,
-  usd,
-  xrp
-} from '@kava-labs/crypto-rate-utils'
+import { btc, convert, usd, xrp, eth } from '@kava-labs/crypto-rate-utils'
 import test from 'ava'
 import BigNumber from 'bignumber.js'
 import 'envkey'
@@ -12,10 +6,20 @@ import { connect, LedgerEnv } from '..'
 import { SettlementEngineType } from '../engine'
 import { performance } from 'perf_hooks'
 
-test('lnd -> lnd', async t => {
+test.skip('lnd -> lnd', async t => {
   const { state, deposit, withdraw, add, streamMoney } = await connect(
     LedgerEnv.Local
   )
+
+  // const uplink = await add({
+  //   settlerType: SettlementEngineType.XrpPaychan,
+  //   secret: process.env.XRP_SECRET_CLIENT_1!
+  // })
+
+  const uplink = await add({
+    settlerType: SettlementEngineType.Machinomy,
+    privateKey: process.env.ETH_PRIVATE_KEY_CLIENT_1!
+  })
 
   const uplink2 = await add({
     settlerType: SettlementEngineType.Lnd,
@@ -25,15 +29,10 @@ test('lnd -> lnd', async t => {
     grpcPort: parseInt(process.env.LIGHTNING_LND_GRPCPORT_CLIENT_1!, 10)
   })
 
-  const uplink = await add({
-    settlerType: SettlementEngineType.XrpPaychan,
-    secret: process.env.XRP_SECRET_CLIENT_1!
-  })
-
   await deposit({
     uplink,
     authorize: () => Promise.resolve(true),
-    amount: convert(usd(5), xrp(), state.rateBackend)
+    amount: convert(usd(5), eth(), state.rateBackend)
   })
 
   await new Promise(r => setTimeout(r, 2000))
@@ -50,7 +49,7 @@ test('lnd -> lnd', async t => {
 
   const start = performance.now()
   await streamMoney({
-    amount: convert(usd(2), xrp(), state.rateBackend),
+    amount: convert(usd(2), eth(), state.rateBackend),
     source: uplink,
     dest: uplink2
   })
