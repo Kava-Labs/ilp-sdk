@@ -17,18 +17,18 @@ import LightningPlugin, {
 import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
 import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
-import { LedgerEnv, SettlementModule, State } from '../..'
-import { SettlementEngine, SettlementEngineType } from '../../engine'
-import { Flavor } from '../../types/util'
+import { LedgerEnv, SettlementModule, State } from '..'
+import { SettlementEngine, SettlementEngineType } from '../engine'
+import { Flavor } from '../types/util'
 import {
   BaseUplink,
   BaseUplinkConfig,
   distinctBigNum,
   getNativeMaxInFlight,
   ReadyUplink
-} from '../../uplink'
-import createLogger from '../../utils/log'
-import { MemoryStore } from '../../utils/store'
+} from '../uplink'
+import createLogger from '../utils/log'
+import { MemoryStore } from '../utils/store'
 
 /*
  * ------------------------------------

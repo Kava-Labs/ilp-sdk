@@ -1,12 +1,12 @@
 import { AssetUnit } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import { LndSettlementEngine, Lnd } from './settlement/lnd/lnd'
+import { LndSettlementEngine, Lnd } from './settlement/lnd'
 import {
   XrpPaychanSettlementEngine,
   XrpPaychan
-} from './settlement/xrp-paychan/xrp-paychan'
+} from './settlement/xrp-paychan'
 import { State, LedgerEnv } from '.'
-import { Machinomy } from './settlement/machinomy/machinomy'
+import { Machinomy } from './settlement/machinomy'
 
 export enum SettlementEngineType {
   /** Lightning daeman */

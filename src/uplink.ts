@@ -16,22 +16,19 @@ import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { SettlementEngine, SettlementEngineType } from './engine'
-import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd/lnd'
+import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd'
 import {
   XrpPaychanBaseUplink,
   XrpPaychanUplinkConfig,
   XrpPaychan
-} from './settlement/xrp-paychan/xrp-paychan'
+} from './settlement/xrp-paychan'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
 import { ReadyCredentials, getCredentialId } from './credential'
 import { generateSecret, generateToken } from './utils/crypto'
-import {
-  Machinomy,
-  MachinomyBaseUplink
-} from './settlement/machinomy/machinomy'
+import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
 
 const log = createLogger('switch-api:uplink')
 

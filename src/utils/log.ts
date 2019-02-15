@@ -1,5 +1,5 @@
 import createLogger from 'ilp-logger'
-import pino from 'pino'
+export default (name: string) => createLogger(name)
 
 // export default (name: string) =>
 //   pino({
@@ -13,5 +13,3 @@ import pino from 'pino'
 //       translateTime: 'yyyy-mm-dd HH:MM:ss.l'
 //     }
 //   })
-
-export default (name: string) => createLogger(name)

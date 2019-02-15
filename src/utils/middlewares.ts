@@ -32,7 +32,7 @@ export class PluginWrapper implements Plugin {
   private dataHandler: DataHandler = defaultDataHandler
 
   /**
-   * Amount owed *by us* to our peer for **our packets they've forwarded** (outgoing balance)
+   * Amount owed *by us* to our peer for **packets we've sent to them** (outgoing balance)
    * - Positive amount indicates we're indebted to the peer and need to pay them for packets they've already forwarded
    * - Negative amount indicates we've prefunded the peer and have as much credit available to spend
    *
@@ -57,7 +57,7 @@ export class PluginWrapper implements Plugin {
    *   unless we respond with a REJECT (e.g. we decline to forward it, or it's rejected upstream).
    *
    * EFFECTS:
-   * - Determines if an incoming ILP PREPARE is forwarded/cleared
+   * - Determines if an incoming PREPARE is forwarded/cleared
    */
   readonly receivableBalance$: BehaviorSubject<BigNumber>
 

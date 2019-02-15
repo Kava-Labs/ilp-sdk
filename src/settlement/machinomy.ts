@@ -9,17 +9,17 @@ import {
   BaseUplinkConfig,
   BaseUplink,
   distinctBigNum
-} from '../../uplink'
-import { MemoryStore } from '../../utils/store'
-import { streamMoney } from '../../services/switch'
+} from '../uplink'
+import { MemoryStore } from '../utils/store'
+import { streamMoney } from '../services/switch'
 import Web3 from 'web3'
 import { HttpProvider } from 'web3/providers'
-import createLogger from '../../utils/log'
-import { SettlementEngine, SettlementEngineType } from '../../engine'
-import { fetchGasPrice } from '../shared/eth'
-import { LedgerEnv, State, SettlementModule } from '../..'
+import createLogger from '../utils/log'
+import { SettlementEngine, SettlementEngineType } from '../engine'
+import { fetchGasPrice } from './shared/eth'
+import { LedgerEnv, State, SettlementModule } from '..'
 import { Option, some, none } from 'fp-ts/lib/Option'
-import { Brand } from '../../types/util'
+import { Brand } from '../types/util'
 import { Subject, BehaviorSubject } from 'rxjs'
 import { map } from 'rxjs/operators'
 
@@ -147,9 +147,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   const store = config.plugin.store
 
   const { privateKey: ethereumPrivateKey } = credential
-  const settler = state.settlers[
-    credential.settlerType
-  ]
+  const settler = state.settlers[credential.settlerType]
   const { ethereumProvider } = settler
 
   const getGasPrice = () => fetchGasPrice(state)(settler)

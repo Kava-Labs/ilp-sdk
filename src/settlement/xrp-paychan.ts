@@ -1,18 +1,13 @@
 import { convert, usd, xrp, drop, xrpBase } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import XrpAsymClient, {
-  PaymentChannelClaim,
-  PaymentChannel
-} from 'ilp-plugin-xrp-asym-client'
 import XrpPlugin from 'ilp-plugin-xrp-paychan'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
-import { MemoryStore } from '../../utils/store'
-import createLogger from '../../utils/log'
+import { MemoryStore } from '../utils/store'
+import createLogger from '../utils/log'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
-import { PluginWrapper } from '../../utils/middlewares'
-import { SettlementEngine, SettlementEngineType } from '../../engine'
-import { LedgerEnv, State, SettlementModule } from '../..'
+import { SettlementEngine, SettlementEngineType } from '../engine'
+import { LedgerEnv, State, SettlementModule } from '..'
 import {
   AuthorizeDeposit,
   AuthorizeWithdrawal,
@@ -20,11 +15,12 @@ import {
   BaseUplink,
   distinctBigNum,
   ReadyUplink
-} from '../../uplink'
+} from '../uplink'
 import { Observable, BehaviorSubject, Subject, combineLatest } from 'rxjs'
 import { Flavor } from 'types/util'
 import { map, filter } from 'rxjs/operators'
-import { isThatCredentialId } from '../../credential'
+import { isThatCredentialId } from '../credential'
+import { FormattedPaymentChannel } from 'ripple-lib/dist/npm/ledger/parse/payment-channel'
 
 const log = createLogger('switch-api:xrp-paychan')
 
@@ -34,15 +30,11 @@ const log = createLogger('switch-api:xrp-paychan')
  * ------------------------------------
  */
 
-// TODO This is atrocious. Eliminate it
-const getSettler = (state: State) =>
-  state.settlers[SettlementEngineType.XrpPaychan]
-
 export interface XrpPaychanSettlementEngine extends SettlementEngine {
   api: RippleAPI
 }
 
-const getXrpServer = (ledgerEnv: LedgerEnv): string =>
+const getXrpServerWebsocketUri = (ledgerEnv: LedgerEnv): string =>
   ledgerEnv === 'mainnet'
     ? 'wss://s1.ripple.com'
     : 'wss://s.altnet.rippletest.net:51233'
@@ -51,13 +43,12 @@ const setupEngine = async (
   ledgerEnv: LedgerEnv
 ): Promise<XrpPaychanSettlementEngine> => {
   const api = new RippleAPI({
-    server: getXrpServer(ledgerEnv)
+    server: getXrpServerWebsocketUri(ledgerEnv)
   })
   await api.connect()
 
   return {
-    settlerType: SettlementEngineType.XrpPaychan, // TODO!
-
+    settlerType: SettlementEngineType.XrpPaychan,
     assetCode: 'XRP',
     assetScale: 9,
     baseUnit: xrpBase,
@@ -84,42 +75,39 @@ const setupEngine = async (
  * ------------------------------------
  */
 
-// TODO Use Ripple API `isValidSecret` and `deriveKeypair` rather than ripple-keypairs! (for types!)
-// (might still require me to add types... because it's bad)
+export type UnvalidatedXrpSecret = {
+  settlerType: SettlementEngineType.XrpPaychan
+  secret: string
+}
 
-/** Used to ensure XRP credentials can only be validated right here */
 export type ValidatedXrpSecret = Flavor<
   {
     settlerType: SettlementEngineType.XrpPaychan
-    secret: string // TODO This should be "XrpSecret", the object should be "Credential"
+    secret: string
+    address: string
   },
   'ValidatedXrpSecret'
 >
-export type ValidatedXrpAddress = Flavor<string, 'ValidatedXrpAddress'>
 
-export interface ReadyXrpCredential {
-  settlerType: SettlementEngineType.XrpPaychan
-  /** TODO Add explantion */
-  secret: string
-  /** TODO Add explanation */
-  address: ValidatedXrpAddress
-}
-
-const setupCredential = (cred: ValidatedXrpSecret) => async (
+const setupCredential = (cred: UnvalidatedXrpSecret) => async (
   state: State
-): Promise<ReadyXrpCredential> => {
-  /* ripple-lib validates the secret by wrapping deriveKeypair in a try-catch */
+): Promise<ValidatedXrpSecret> => {
+  // `deriveKeypair` will throw if the secret is invalid
   const address = deriveAddress(deriveKeypair(cred.secret).publicKey)
-  const settler = getSettler(state)
+  const settler = state.settlers[cred.settlerType]
+
+  // Rejects if the XRP account does not exist
   await settler.api.getAccountInfo(address)
+
   return {
     ...cred,
     address
   }
 }
 
-const uniqueId = (cred: ReadyXrpCredential): ValidatedXrpAddress => cred.address
+const uniqueId = (cred: ValidatedXrpSecret): string => cred.address
 
+// TODO Can I eliminate this?
 const closeCredential = () => Promise.resolve()
 
 /**
@@ -130,34 +118,29 @@ const closeCredential = () => Promise.resolve()
 
 export interface XrpPaychanUplinkConfig extends BaseUplinkConfig {
   settlerType: SettlementEngineType.XrpPaychan
-  credentialId: ValidatedXrpAddress
+  credentialId: string
 }
 
 export interface XrpPaychanBaseUplink extends BaseUplink {
   settlerType: SettlementEngineType.XrpPaychan
-  credentialId: ValidatedXrpAddress
-  plugin: PluginWrapper // TODO Fix this/remove balance wrapper from here
-  xrpPlugin: any // TODO !
+  credentialId: string
+  plugin: any // TODO Fix this/remove balance wrapper from here
 }
 
-// TODO 'ReadyUplink' doesn't exsit!
 export type ReadyXrpPaychanUplink = XrpPaychanBaseUplink & ReadyUplink
 
-const connectUplink = (credential: ReadyXrpCredential) => (
+const connectUplink = (credential: ValidatedXrpSecret) => (
   state: State
 ) => async (config: BaseUplinkConfig): Promise<XrpPaychanBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
   const { secret } = credential
-  const xrpServer = getXrpServer(state.ledgerEnv)
+  const xrpServer = getXrpServerWebsocketUri(state.ledgerEnv)
 
-  // TODO Should there be a way to create a new channel that's *not* for $10?
-  // TODO xrp-asym-server default min incoming is 10 XRP, so it'd be good for that to be a floor
-  //      (if we're allowing the user to manually enter it, there'd also need to be a floor)
-  const outgoingChannelAmountXRP = convert(
+  const outgoingChannelAmount = convert(
     usd(10),
-    xrpBase(), // TODO It's not in XRP, rename the var!
+    xrpBase(),
     state.rateBackend
   ).toString()
 
@@ -167,9 +150,9 @@ const connectUplink = (credential: ReadyXrpCredential) => (
       currencyScale: 9,
       secret,
       xrpServer,
-      channelAmount: outgoingChannelAmountXRP, // TODO Rename to "channel fund amount"
-      // outgoingChannelAmountXRP // TODO !
-      autoFundChannels: false // TODO !
+      // TODO Fix this config (e.g. channelAmount is base units)
+      channelAmount: outgoingChannelAmount,
+      autoFundChannels: false
     },
     {
       log: createLogger('ilp-plugin-xrp'),
@@ -179,13 +162,13 @@ const connectUplink = (credential: ReadyXrpCredential) => (
 
   /** Stream of updated properties on the underlying plugin */
   const plugin$ = new Subject<{
-    key: keyof XrpAsymClient
+    key: any
     val: any
   }>()
 
   /** Trap all property updates on the plugin to emit them on observable */
   const pluginProxy = new Proxy(plugin, {
-    set: (target, key: keyof XrpAsymClient, val) => {
+    set: (target, key, val) => {
       plugin$.next({
         key,
         val
@@ -195,12 +178,27 @@ const connectUplink = (credential: ReadyXrpCredential) => (
   })
 
   /** Emit updates when the specific property is updated on the plugin */
-  // TODO Replace `any` with `XrpPlugin`
-  const observeProp = <K extends keyof any>(key: K): Observable<any[K]> =>
+  const observeProp = <K>(key: K): Observable<any[K]> =>
     plugin$.pipe(
       filter(update => update.key === key),
       map(({ val }) => val)
     )
+
+  // TODO Where should these types be defined?
+
+  interface PaymentChannel extends FormattedPaymentChannel {
+    /** Total amount of XRP funded in this channel */
+    amount: string
+    /** Total amount of XRP delivered by this channel (per docs) */
+    balance: string
+  }
+
+  interface PaymentChannelClaim {
+    /** Value of the claim, in plugin base units */
+    amount: string
+    /** Valid signature to enforce the claim on-ledger */
+    signature: string
+  }
 
   /** Operator on observable to extract the amount of the claim/channel */
   const getValue = map<
@@ -265,7 +263,6 @@ const connectUplink = (credential: ReadyXrpCredential) => (
     settlerType: SettlementEngineType.XrpPaychan,
     credentialId: uniqueId(credential),
     plugin: pluginProxy,
-    xrpPlugin: pluginProxy,
     outgoingCapacity$,
     incomingCapacity$,
     totalSent$,
@@ -276,10 +273,10 @@ const connectUplink = (credential: ReadyXrpCredential) => (
 // TODO Can I elimiante this?
 const getCredential = (state: State) => (credentialId: string) =>
   state.credentials.filter(
-    (c): c is ReadyXrpCredential =>
+    (c): c is ValidatedXrpSecret =>
       c.settlerType === SettlementEngineType.XrpPaychan &&
       uniqueId(c) === credentialId
-  )[0] // TODO!
+  )[0]
 
 const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   amount,
@@ -288,12 +285,13 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   amount: BigNumber
   authorize: AuthorizeDeposit
 }) => {
-  const { api } = getSettler(state)
-  const { address } = getCredential(state)(uplink.credentialId) // TODO Implement credential lookup!
+  const { api } = state.settlers[uplink.settlerType]
+  const { address } = getCredential(state)(uplink.credentialId)
 
-  // Default in xrp-asym-server requires 10 XRP escrowed to create the reciprocal channel
+  // TODO Default in xrp-asym-server requires 10 XRP escrowed to create the reciprocal channel
+  // (ensure this is compatible with the server plugin)
   if (amount.lt(10)) {
-    throw new Error() // TODO Amount insufficient!
+    throw new Error('Amount insufficient')
   }
 
   // Confirm that the account has sufficient funds to cover the reserve
@@ -326,18 +324,18 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   })
 
   // Check if we need to create a new channel or deposit to an existing channel
-  const requiresNewChannel = !uplink.xrpPlugin._outgoingChannel
+  const requiresNewChannel = !uplink.plugin._outgoingChannel
   requiresNewChannel
-    ? await uplink.xrpPlugin._createOutgoingChannel(amount.toString())
-    : await uplink.xrpPlugin._fundOutgoingChannel(amount.toString())
+    ? await uplink.plugin._createOutgoingChannel(amount.toString())
+    : await uplink.plugin._fundOutgoingChannel(amount.toString())
 }
 
 const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   authorize: AuthorizeWithdrawal
 ) => {
-  const { api } = getSettler(state)
+  const { api } = state.settlers[uplink.settlerType]
   const readyCredential = state.credentials.find(
-    isThatCredentialId<ReadyXrpCredential>(
+    isThatCredentialId<ValidatedXrpSecret>(
       uplink.credentialId,
       uplink.settlerType
     )
@@ -353,8 +351,8 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
    */
   const submitter = createSubmitter(api, address, secret)
 
-  // Submit the latest incoming claim to the ledger
-  await uplink.xrpPlugin._claimFunds()
+  // Submit the latest incoming claim as a checkpoint to the ledger
+  await uplink.plugin._claimFunds()
 
   const closeChannel = (channelId: string) =>
     submitter
@@ -369,7 +367,7 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   const value = uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value)
   await authorize({ fee, value })
 
-  const outgoingChannelId = uplink.xrpPlugin._outgoingChannel
+  const outgoingChannelId = uplink.plugin._outgoingChannel
   if (outgoingChannelId) {
     await closeChannel(outgoingChannelId)
   }
@@ -379,7 +377,7 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   // TODO This *possibly* fixes that bug
   await new Promise(r => setTimeout(r, 1000))
 
-  const incomingChannelId = uplink.xrpPlugin._incomingChannel
+  const incomingChannelId = uplink.plugin._incomingChannel
   if (incomingChannelId) {
     await closeChannel(incomingChannelId)
   }
@@ -397,8 +395,8 @@ export interface XrpPaychanSettlementModule
   extends SettlementModule<
     SettlementEngineType.XrpPaychan,
     XrpPaychanSettlementEngine,
+    UnvalidatedXrpSecret,
     ValidatedXrpSecret,
-    ReadyXrpCredential,
     XrpPaychanBaseUplink,
     ReadyXrpPaychanUplink
   > {
@@ -416,9 +414,7 @@ export interface XrpPaychanSettlementModule
   ) => (state: State) => (authorize: AuthorizeWithdrawal) => Promise<void>
 }
 
-// TODO Rename this?
 export const XrpPaychan: XrpPaychanSettlementModule = {
-  // settlerType: SettlementEngineType.XrpPaychan,
   setupEngine,
   setupCredential,
   uniqueId,

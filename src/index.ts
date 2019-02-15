@@ -23,11 +23,11 @@ import {
   SettlementEngines,
   createEngine
 } from './engine'
-import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd/lnd'
+import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd'
 import {
   XrpPaychanSettlementModule,
   XrpPaychanSettlementEngine
-} from './settlement/xrp-paychan/xrp-paychan'
+} from './settlement/xrp-paychan'
 import { streamMoney } from './services/switch'
 import BigNumber from 'bignumber.js'
 import {
@@ -35,9 +35,9 @@ import {
   getOrCreateCredential,
   closeCredential,
   isThatCredentialId,
-  ValidatedCredentials
+  CredentialConfigs
 } from './credential'
-import { MachinomySettlementEngine } from 'settlement/machinomy/machinomy'
+import { MachinomySettlementEngine } from 'settlement/machinomy'
 
 export type SettlementModules = LndSettlementModule | XrpPaychanSettlementModule
 
@@ -47,7 +47,7 @@ export type SettlementModule<
   /** Settlements engines */
   TSettlementEngine extends SettlementEngine,
   /** Credentials */
-  TValidatedCredential extends ValidatedCredentials,
+  TValidatedCredential extends CredentialConfigs,
   TReadyCredential extends ReadyCredentials,
   /** Uplinks */
   // TODO Do the specific types for uplinks themselves actually matter, or is it really just the credential types?
@@ -107,7 +107,7 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
   //      (unnecessary/backburner until persistence is added)
 
   const add = async (
-    credentialConfig: ValidatedCredentials
+    credentialConfig: CredentialConfigs
   ): Promise<ReadyUplinks> => {
     // TODO Is this necessary if I'm not using the settler directly?
     const settler = state.settlers[credentialConfig.settlerType]
@@ -208,6 +208,7 @@ export interface State {
   readonly maxInFlightUsd: AssetUnit
   // TODO Is this simpler as an array and filter? Hard to get the types right
   settlers: {
+    // [settlerType: keyof typeof SettlementEngineType]: SettlementEngines
     [SettlementEngineType.Lnd]: LndSettlementEngine
     [SettlementEngineType.Machinomy]: MachinomySettlementEngine
     [SettlementEngineType.XrpPaychan]: XrpPaychanSettlementEngine
