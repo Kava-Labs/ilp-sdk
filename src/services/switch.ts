@@ -3,17 +3,16 @@ import BigNumber from 'bignumber.js'
 import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
 import {
   sendPacket,
-  ReadyUplink,
   deregisterPacketHandler,
-  registerPacketHandler
+  registerPacketHandler,
+  ReadyUplinks
 } from '../uplink'
 import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { APPLICATION_ERROR } from '../utils/packet'
-import { State, getSettler } from '../api'
-import { combineLatest } from 'rxjs'
-import { first } from 'rxjs/operators'
+import { State } from '..'
+import { getOrCreateEngine } from '../engine'
 
 const log = createLogger('switch-api:stream')
 
@@ -25,23 +24,9 @@ const IDLE_TIMEOUT = 10000
 /** Amount of time in the future when packets should expire */
 const EXPIRATION_WINDOW = 5000
 
-export interface StreamMoneyOpts {
-  /** Amount of money to be sent over stream, in units of exchange */
-  amount: BigNumber
-  /** Send assets via the given source ledger/plugin */
-  source: ReadyUplink
-  /** Receive assets via the given destination ledger/plugin */
-  dest: ReadyUplink
-  /**
-   * Maximum percentage of slippage allowed. If the per-packet exchange rate
-   * drops below the price oracle's rate minus this slippage,
-   * the packet will be rejected
-   */
-  slippage?: BigNumber.Value
-}
-
 /**
- * Send money between the two upinks
+ * Send money between the two upinks, with the total untrusted
+ * amount bounded by the given maxInFlightUsd
  *
  * @param amount Total (maximum) amount to send, in units of exchange of source uplink
  * @param source Source uplink to send outgoing money
@@ -53,10 +38,26 @@ export const streamMoney = (state: State) => async ({
   source,
   dest,
   slippage = 0.01
-}: StreamMoneyOpts): Promise<void> => {
-  // TODO Fix this! (change getSettler to create settlement engine)
-  const sourceSettler = getSettler(state)(source.settlerType)!
-  const destSettler = getSettler(state)(dest.settlerType)!
+}: {
+  /** Amount of money to be sent over stream, in units of exchange */
+  amount: BigNumber
+  /** Send assets via the given source ledger/plugin */
+  source: ReadyUplinks
+  /** Receive assets via the given destination ledger/plugin */
+  dest: ReadyUplinks
+  /**
+   * Maximum percentage of slippage allowed. If the per-packet exchange rate
+   * drops below the price oracle's rate minus this slippage,
+   * the packet will be rejected
+   */
+  slippage?: BigNumber.Value
+}): Promise<void> => {
+  // TODO The state must be updated with the new settlers!
+  const [sourceSettler, state1] = await getOrCreateEngine(
+    state,
+    source.settlerType
+  )
+  const [destSettler, state2] = await getOrCreateEngine(state, dest.settlerType)
 
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),
@@ -80,6 +81,7 @@ export const streamMoney = (state: State) => async ({
    *   and use that to determine whether to fulfill it.
    */
 
+  // TODO Move this to uplink.ts so it's more abstracted
   const format = (amount: BigNumber) =>
     `${convert(
       sourceSettler.baseUnit(amount),
@@ -119,22 +121,7 @@ export const streamMoney = (state: State) => async ({
           amountToSend
         )} was fulfilled`
       )
-
-      // Wait for the settlements to finish
-      // TODO Add timeout here to reject if it doesn't occur?
-      // TODO This doesn't work when settlement is disabled/streaming credit off the connector
-      // return combineLatest(source.availableToDebit$, dest.availableToCredit$)
-      //   .pipe(
-      //     first(
-      //       ([availableToDebit, availableToCredit]) =>
-      //         // Ensure the source uplink has finished prefunding again
-      //         availableToDebit.gte(source.idleAvailableToDebit) &&
-      //         // Ensure the peer has finished settling up with the destination uplink
-      //         availableToCredit.gte(dest.idleAvailableToCredit)
-      //     )
-      //   )
-      //   .toPromise()
-    } else if (remainingAmount.lte(0)) {
+    } else if (remainingAmount.isNegative()) {
       return log.info(
         `stream sent too much: ${format(
           remainingAmount.negated()
@@ -173,32 +160,19 @@ export const streamMoney = (state: State) => async ({
       return Promise.reject()
     }
 
-    const availableToDebit = convert(
-      sourceSettler.exchangeUnit(source.availableToDebit$.value),
-      sourceSettler.baseUnit()
-    )
-    if (availableToDebit.lte(0)) {
-      /**
-       * Wait 5 ms to see if we've prefunded the connector
-       * some more and have a balance to spend down from
-       */
-      await new Promise(r => setTimeout(r, 5))
-      return trySendPacket()
-    }
-
     let packetAmount = BigNumber.min(
-      availableToDebit,
+      source.maxInFlight,
       remainingAmount,
       maxPacketAmount
     )
 
     // Distribute the remaining amount to send such that the per-packet amount is approximately equal
     const remainingNumPackets = remainingAmount
-      .div(packetAmount)
-      .dp(0, BigNumber.ROUND_CEIL)
+      .dividedBy(packetAmount)
+      .decimalPlaces(0, BigNumber.ROUND_CEIL)
     packetAmount = remainingAmount
-      .div(remainingNumPackets)
-      .dp(0, BigNumber.ROUND_CEIL)
+      .dividedBy(remainingNumPackets)
+      .decimalPlaces(0, BigNumber.ROUND_CEIL)
 
     const packetNum = (prepareCount += 1)
 
@@ -271,7 +245,7 @@ export const streamMoney = (state: State) => async ({
           )
         } else if (newMaxPacketAmount.lt(packetAmount)) {
           log.debug(
-            `reducing packet amount from ${packetAmount} to ${maxPacketAmount}`
+            `reducing packet amount from ${packetAmount} to ${newMaxPacketAmount}`
           )
           maxPacketAmount = newMaxPacketAmount
         }

@@ -1,53 +1,46 @@
-import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
+import { convert } from '@kava-labs/crypto-rate-utils'
+import BigNumber from 'bignumber.js'
+import createLogger from 'ilp-logger'
 import {
   deserializeIlpPrepare,
   deserializeIlpReply,
+  IlpPrepare,
   IlpReply,
   serializeIlpPrepare,
-  IlpPrepare,
   serializeIlpReply
 } from 'ilp-packet'
-import { Plugin, DataHandler, IlpPrepareHandler } from './types/plugin'
-import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
-import BigNumber from 'bignumber.js'
-import { SettlementEngineType, SettlementEngine } from './settlement'
-import * as Lnd from './settlement/lnd/lnd'
-// import * as Machinomy from 'settlement/machinomy/machinomy'
-import * as XrpPaychan from './settlement/xrp-paychan/xrp-paychan'
-import { SimpleStore } from './utils/store'
-import { convert } from '@kava-labs/crypto-rate-utils'
-import { State, getSettler } from './api'
-import { BehaviorSubject, zip, combineLatest } from 'rxjs'
-import { startStreamServer, stopStreamServer } from './services/stream-server'
-import { generateSecret } from './utils/crypto'
+import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
 import { Server as StreamServer } from 'ilp-protocol-stream'
-import { streamMoney } from './services/switch'
-import { map, tap, distinctUntilChanged, first } from 'rxjs/operators'
-import createLogger from './utils/log'
+import { BehaviorSubject, combineLatest } from 'rxjs'
+import { distinctUntilChanged, map } from 'rxjs/operators'
+import { State } from '.'
+import { startStreamServer, stopStreamServer } from './services/stream-server'
+import {
+  SettlementEngine,
+  SettlementEngineType,
+  getOrCreateEngine
+} from './engine'
+import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd/lnd'
+import {
+  XrpPaychanBaseUplink,
+  XrpPaychanUplinkConfig,
+  XrpPaychan
+} from './settlement/xrp-paychan/xrp-paychan'
+import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
+import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
+import { SimpleStore, MemoryStore } from './utils/store'
+import { PluginWrapper } from './utils/middlewares'
+import { ReadyCredentials, getCredentialId } from './credential'
+import { generateSecret, generateToken } from './utils/crypto'
 
-export const getSettlerModule = (settlerType: SettlementEngineType) => {
-  // return Lnd
-  // TODO Add this back (to support everything)!
-  switch (settlerType) {
-    case SettlementEngineType.Lnd:
-      return Lnd
-    // case SettlementEngineType.Machinomy:
-    //   return Machinomy
-    case SettlementEngineType.XrpPaychan:
-      return XrpPaychan
-  }
-}
-
-/**
- * Build the ledger-specific uplink, and decorate it with generic functionality
- */
-
-// TODO Temporary types!
-type MachinomyUplinkConfig = { baz: 'adsklfjakldsfj' }
-type XrpPaychanUplinkConfig = { foo: 'mehakldjf' }
+const log = createLogger('switch-api:uplink')
 
 export interface BaseUplinkConfig {
   settlerType: SettlementEngineType
+  stream: {
+    /** Enables deterministic generation of previous shared secrets so we can accept payments */
+    serverSecret: Buffer
+  }
   plugin: {
     btp: {
       serverUri: string
@@ -57,55 +50,23 @@ export interface BaseUplinkConfig {
   }
 }
 
-export type UplinkConfig = (
-  | Lnd.LndUplinkConfig
-  | MachinomyUplinkConfig
-  | XrpPaychanUplinkConfig) &
+export type UplinkConfig = (LndUplinkConfig | XrpPaychanUplinkConfig) &
   BaseUplinkConfig
 
-// TODO Add comments here
-
 export interface BaseUplink {
-  plugin: Plugin // TODO make readonly
+  readonly plugin: Plugin
   readonly settlerType: SettlementEngineType
   readonly credentialId: string
-
-  // BALANCES
-
   /**
-   * Amount of our *money* in layer 2,
+   * Amount of our *money* in layer 2 we have custody over,
    * immediately available for us to send to our peer
    */
   readonly outgoingCapacity$: BehaviorSubject<BigNumber>
   /**
-   * Amount of *money* our peer has in layer 2,
+   * Amount of *money* our peer has custody over in layer 2,
    * immediately available for our peer to send to us
    */
   readonly incomingCapacity$: BehaviorSubject<BigNumber>
-  /**
-   * Amount of *credit* our peer *is* indebted to us,
-   * immediately available for us to spend from
-   *
-   * - Essentially, the amount prefunded at any moment in time
-   */
-  readonly availableToDebit$: BehaviorSubject<BigNumber>
-  /**
-   * Amount of *credit* our peer *should be* indebted to us
-   * after we've settled up with them (settleTo)
-   */
-  readonly idleAvailableToDebit: BigNumber
-  /**
-   * Amount of *credit* we *are* extending to our peer,
-   * immediately available for our peer to spend from
-   *
-   * TODO "our peer to spend from" isn't true/the best description
-   */
-  readonly availableToCredit$: BehaviorSubject<BigNumber>
-  /**
-   * Amount of *credit* that we *should be* extending to our peer
-   * after they've settled up with us (max balance - settleTo)
-   */
-  readonly idleAvailableToCredit: BigNumber
   /**
    * Amount of *money* we've received in layer 2 that is *unavailble* to send
    * (money that we cannot directly send back to our peer)
@@ -118,70 +79,149 @@ export interface BaseUplink {
   readonly totalSent$: BehaviorSubject<BigNumber>
 }
 
-// TODO For testing purposes.
-// interface BaseMachinomyUplink extends BaseUplink {
-//   foo: 'bar'
-// }
-// interface BaseXrpPaychanUplink extends BaseUplink {
-//   bar: 'baz'
-// }
+export type BaseUplinks = LndBaseUplink | XrpPaychanBaseUplink
 
-export type ReadyUplink = (
-  | Lnd.LndBaseUplink
-  // | BaseMachinomyUplink
-  | XrpPaychan.XrpPaychanBaseUplink) & {
+export interface ReadyUplink {
+  /** Wrapper plugin with balance logic to and perform accounting and limit the packets we fulfill */
+  readonly pluginWrapper: PluginWrapper
   /** Handle incoming packets from the endpoint sending money or trading */
   streamClientHandler: IlpPrepareHandler
   /** Handle incoming packets from the endpoint receiving money from other parties */
   streamServerHandler: DataHandler
   /** ILP address assigned from upstream connector */
   readonly clientAddress: string
+  /** Max amount to be sent unsecured at a given time */
+  readonly maxInFlight: BigNumber
   /** Total amount in layer 2 that can be claimed on layer 1 */
   readonly balance$: BehaviorSubject<BigNumber>
-  /**
-   * Total amount that we can send immediately over Interledger,
-   * including money in layer 2 and amount to debit from connector
-   */
+  /** Total amount that we can send immediately over Interledger */
   readonly availableToSend$: BehaviorSubject<BigNumber>
-  /**
-   * Total amount that we could receive immediately over Interledger,
-   * including credit we're extending and incoming capacity in layer 2
-   */
+  /** Total amount that we could receive immediately over Interledger */
   readonly availableToReceive$: BehaviorSubject<BigNumber>
   /** STREAM server to accept incoming payments from any Interledger user */
   readonly streamServer: StreamServer
 }
 
-// TODO ALOT needs to be fixed here!
-export const connectUplink = (state: State) => (credential: any) => async (
-  config: any
-): Promise<ReadyUplink> => {
-  // TODO Fix this code to make it more agnostic!
-  const settler = getSettler(state)(credential.settlerType)! // TODO !
-  const module = getSettlerModule(credential.settlerType)
+export type ReadyUplinks = ReadyUplink & BaseUplinks
 
-  // @ts-ignore TODO
-  const settlerUplink = await module.connectUplink(state)(credential)(config)
+/**
+ * ------------------------------------
+ * GETTING UPLINKS
+ * ------------------------------------
+ */
 
+// TODO This also MUST check what connector it's connected to! (fix that)
+export const isThatUplink = (uplink: ReadyUplinks) => (
+  someUplink: ReadyUplinks
+) =>
+  someUplink.credentialId === uplink.credentialId &&
+  someUplink.settlerType === uplink.settlerType
+
+/**
+ * ------------------------------------
+ * ADDING & CONNECTING UPLINKS
+ * ------------------------------------
+ */
+
+export const createUplink = (state: State) => async (
+  readyCredential: ReadyCredentials
+): Promise<[ReadyUplinks, State]> => {
+  const authToken = await generateToken()
+  const [settler, _] = await getOrCreateEngine(
+    state,
+    readyCredential.settlerType
+  ) // TODO Update state!
+  const createServerUri = settler.remoteConnectors['Kava Labs']
+  const serverUri = createServerUri(authToken)
+  // const serverUriNoToken = createServerUri('') // TODO !
+
+  const credentialId = getCredentialId(readyCredential)
+  const alreadyExists = state.uplinks.some(
+    someUplink =>
+      someUplink.credentialId === credentialId &&
+      someUplink.settlerType === readyCredential.settlerType &&
+      false // TODO This MUST comapre the connector it's connected to!
+  )
+  if (alreadyExists) {
+    throw new Error('Cannot create duplicate uplink')
+  }
+
+  const config: BaseUplinkConfig = {
+    settlerType: readyCredential.settlerType,
+    stream: {
+      serverSecret: await generateSecret()
+    },
+    plugin: {
+      btp: {
+        serverUri,
+        authToken
+      },
+      store: {}
+    }
+  }
+
+  const uplink = await connectUplink(state)(readyCredential)(config)
+  return [
+    uplink,
+    {
+      ...state,
+      uplinks: [...state.uplinks, uplink]
+    }
+  ]
+}
+
+export const connectBaseUplink = (credential: ReadyCredentials) => {
+  switch (credential.settlerType) {
+    case SettlementEngineType.Lnd:
+      return Lnd.connectUplink(credential)
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.connectUplink(credential)
+  }
+}
+
+export const connectUplink = (state: State) => (
+  credential: ReadyCredentials
+) => async (config: BaseUplinkConfig): Promise<ReadyUplinks> => {
+  const uplink = await connectBaseUplink(credential)(state)(config)
+  const [settler, _] = await getOrCreateEngine(state, config.settlerType) // TODO Update state!
   const {
     plugin,
     outgoingCapacity$,
     incomingCapacity$,
-    availableToDebit$,
-    availableToCredit$,
     totalReceived$
-  } = settlerUplink
+  } = uplink
 
-  // Register a money handler, because, apparently otherwise it will error?
-  plugin.registerMoneyHandler(() => Promise.resolve())
-
-  // Connect the plugin & confirm the upstream connector is using the correct asset
   await plugin.connect()
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
-  // Setup internal packet handlers and routing
+  const balance$ = new BehaviorSubject(new BigNumber(0))
+  combineLatest(outgoingCapacity$, totalReceived$)
+    .pipe(sumAll)
+    .subscribe(balance$)
 
-  // TODO Make sure these handlers are mapped correctly, since they are mutated (yuck!)
+  const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
+  const pluginWrapper = new PluginWrapper({
+    plugin,
+    maxBalance: maxInFlight,
+    maxPacketAmount: maxInFlight,
+    assetCode: settler.assetCode,
+    assetScale: settler.assetScale,
+    log: createLogger(`switch-api:${settler.assetCode}:balance`),
+    store: new MemoryStore(config.plugin.store, 'wrapper')
+  })
+
+  // TODO Add back "availableToCredit" and "availableToDebit"
+  //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
+
+  // TODO Also, credit extended should NOT be included in incoming capacity since
+  //      the peer needs the capacity to send us the settlement for that -- it should be subtracted!
+
+  const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
+  incomingCapacity$.subscribe(availableToReceive$)
+
+  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
+  outgoingCapacity$.subscribe(availableToSend$)
+
   const handlers: {
     streamServerHandler: DataHandler
     streamClientHandler: IlpPrepareHandler
@@ -190,8 +230,9 @@ export const connectUplink = (state: State) => (credential: any) => async (
     streamClientHandler: defaultIlpPrepareHandler
   }
 
+  // Setup internal packet handlers and routing
   setupHandlers(
-    plugin,
+    pluginWrapper,
     clientAddress,
     (data: Buffer) => handlers.streamServerHandler(data),
     (prepare: IlpPrepare) => handlers.streamClientHandler(prepare)
@@ -204,68 +245,32 @@ export const connectUplink = (state: State) => (credential: any) => async (
   const streamServer = await startStreamServer(
     plugin,
     registerServerHandler,
-    await generateSecret() // TODO Use this from the config
+    config.stream.serverSecret
   )
 
-  const log = createLogger(`ilp:test:${settler.assetCode}`)
-
-  // TODO Better explanation here?
-  // TODO Is this correct? Previously I just used `combineLatest` and `sumAll`
-  // TODO If availableToDebit changes, outgoing capacity ALWAYS changes! (but if outgoing capacity changes -- e.g. deposit -- prefund won't necessarily change)
-  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
-  /**
-   * Since a change in that amount prefunded to the connector also
-   * likely changes the outgoing capacity, use zip
-   */
-  combineLatest(outgoingCapacity$, availableToDebit$)
-    .pipe(
-      tap(vals => {
-        // TODO Temporary! Remove this!
-        // log.info(`OUTGOING CAPACITY:  ${vals[0]}`)
-        // log.info(`AVAILABLE TO DEBIT: ${vals[1]}`)
-      }),
-      sumAll()
-    )
-    .subscribe(availableToSend$)
-
-  // Calculate available balance
-  const balance$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(availableToSend$, totalReceived$)
-    .pipe(sumAll())
-    .subscribe(balance$)
-
-  balance$.subscribe(amount => {
-    log.info('BALANCE: ', amount.toString())
-  })
-
-  const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(incomingCapacity$, availableToCredit$)
-    .pipe(sumAll())
-    .subscribe({
-      next: val => {
-        availableToReceive$.next(val)
-      },
-      complete: () => {
-        availableToReceive$.complete()
-      },
-      error: err => {
-        availableToReceive$.error(err)
-      }
-    })
-
   return Object.assign(handlers, {
-    ...settlerUplink,
+    ...uplink,
     clientAddress,
     streamServer,
+    maxInFlight,
+    pluginWrapper,
     balance$,
     availableToSend$,
     availableToReceive$
   })
 }
 
-/** Handle incoming packets */
-
-// EFFECT: registers the handlers on the plugin itself
+/**
+ * Register handlers for incoming packets, routing incoming payments to the STREAM
+ * server, and all other packets to the internal switch/trading service.
+ *
+ * @param plugin ILP plugin to send and receive packets
+ * @param clientAddress Resolved address of the root plugin, to differentiate connection tags
+ * @param streamServerHandler Handler registered by the STREAM server for anonymous payments
+ * @param streamClientHandler Handler for packets sent uplink -> uplink within the api itself
+ *
+ * EFFECT: registers handlers on the plugin
+ */
 export const setupHandlers = (
   plugin: Plugin,
   clientAddress: string,
@@ -274,26 +279,23 @@ export const setupHandlers = (
 ) => {
   plugin.deregisterDataHandler()
   plugin.registerDataHandler(async (data: Buffer) => {
-    // TODO Apparently plugin-btp will pass data as undefined. Wtf?
-    if (!data) {
-      throw new Error()
-    }
+    // Apparently plugin-btp will pass data as undefined...
+    if (!data) throw new Error('no ilp packet included')
 
     const prepare = deserializeIlpPrepare(data)
-
     const hasConnectionTag = prepare.destination
       .replace(clientAddress, '')
       .split('.')
       .some(a => !!a)
     return hasConnectionTag
-      ? // Connection ID exists in the ILP address, so route to Stream server
+      ? // Connection ID exists in the ILP address, so route to Stream server (e.g. g.kava.39hadn9ma.~n32j7ba)
         streamServerHandler(data)
-      : // ILP address is for the root plugin, so route to sending connection
+      : // ILP address is for the root plugin, so route packet to sending connection (e.g. g.kava.39hadn9ma)
         serializeIlpReply(await streamClientHandler(prepare))
   })
 }
 
-/** Confirm the upstream peer shares the same asset details and save our ILP address */
+/** Confirm the upstream peer shares the same asset details and fetch our ILP address */
 const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
   plugin: Plugin
 ): Promise<string> => {
@@ -302,13 +304,13 @@ const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
     data => plugin.sendData(data)
   )
 
-  // TODO Refactor to use Option<ClientAddress>
   const incompatiblePeer =
     assetCode !== settler.assetCode || assetScale !== settler.assetScale
   if (incompatiblePeer) {
+    await plugin.disconnect()
     throw new Error(
       'Upstream connector is using a different asset or configuration'
-    ) // TODO Should this error disconnect the plugin? (Really, any error while the connection is attempted)
+    )
   }
 
   return clientAddress
@@ -316,33 +318,40 @@ const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
 
 /*
  * ------------------------------------
- * UTILS
+ * SWITCHING ASSETS
+ * (settlements + sending + clearing)
  * ------------------------------------
  */
 
-/*
- * SWITCHING ASSETS
- */
-
 /**
- * Serialize and send an ILP PREPARE to the upstream connector
+ * Serialize and send an ILP PREPARE to the upstream connector,
+ * and prefund the value of the packet (assumes peer credit limit is 0)
  */
 export const sendPacket = async (
-  uplink: ReadyUplink,
+  uplink: ReadyUplinks,
   prepare: IlpPrepare
-): Promise<IlpReply> =>
-  deserializeIlpReply(
-    await uplink.plugin.sendData(serializeIlpPrepare(prepare))
+): Promise<IlpReply> => {
+  const additionalPrefundRequired = uplink.pluginWrapper.payableBalance$.value.plus(
+    prepare.amount
   )
 
+  // If we've already prefunded enough and the amount is 0 or negative, sendMoney will simply return
+  uplink.pluginWrapper
+    .sendMoney(additionalPrefundRequired.toString())
+    .catch(err => log.error(`Error during outgoing settlement: `, err))
+  return deserializeIlpReply(
+    await uplink.pluginWrapper.sendData(serializeIlpPrepare(prepare))
+  )
+}
+
 /**
- * Registers a handler for incoming packets not addressed to a specific Stream connection,
- * such as packets sent to ourself
+ * Registers a handler for incoming packets not addressed to a
+ * specific Stream connection, such as packets sent from another uplink
  *
  * EFFECT: changes data handler on internal plugin
  */
 export const registerPacketHandler = (handler: IlpPrepareHandler) => (
-  uplink: ReadyUplink
+  uplink: ReadyUplinks
 ) => {
   uplink.streamClientHandler = handler
 }
@@ -351,40 +360,18 @@ export const deregisterPacketHandler = registerPacketHandler(
   defaultIlpPrepareHandler
 )
 
-/*
- * PLUGIN CONFIGURATION
- */
-
 /** Convert the global max-in-flight amount to the local/native units (base units in plugin) */
-export const getNativeMaxInFlight = (
+export const getNativeMaxInFlight = async (
   state: State,
   settlerType: SettlementEngineType
-): BigNumber => {
+): Promise<BigNumber> => {
   const { maxInFlightUsd, rateBackend } = state
-  const { baseUnit } = getSettler(state)(settlerType)! // TODO !
+  const [{ baseUnit }, _] = await getOrCreateEngine(state, settlerType) // TODO Update state!
   return convert(maxInFlightUsd, baseUnit(), rateBackend).dp(
     0,
     BigNumber.ROUND_DOWN
   )
 }
-
-// TODO Can I elimiante this?
-export const getPluginBalanceConfig = (maxInFlight: BigNumber) => {
-  const maxPrefund = maxInFlight.dp(0, BigNumber.ROUND_CEIL)
-  const maxCredit = maxPrefund
-    .plus(maxInFlight.times(2)) // TODO Would this fail if we always send max packets, and exchange rate is > 1?
-    .dp(0, BigNumber.ROUND_CEIL)
-
-  return {
-    maximum: maxCredit,
-    settleTo: maxPrefund,
-    settleThreshold: maxPrefund
-  }
-}
-
-// TODO Can I eliminate this?
-export const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
-  maxInFlight.times(2).toString()
 
 /**
  * ------------------------------------
@@ -392,23 +379,37 @@ export const getPluginMaxPacketAmount = (maxInFlight: BigNumber) =>
  * ------------------------------------
  */
 
-export type AuthorizeDeposit = (
-  params: {
-    /** Total amount that will move from layer 1 to layer 2, in units of exchange */
-    value: BigNumber
-    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-    fee: BigNumber
-  }
-) => Promise<boolean>
+export type AuthorizeDeposit = (params: {
+  /** Total amount that will move from layer 1 to layer 2, in units of exchange */
+  value: BigNumber
+  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+  fee: BigNumber
+}) => Promise<boolean>
 
-export type AuthorizeWithdrawal = (
-  params: {
-    /** Total amount that will move from layer 2 to layer 1, in units of exchange */
-    value: BigNumber
-    /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-    fee: BigNumber
+export type AuthorizeWithdrawal = (params: {
+  /** Total amount that will move from layer 2 to layer 1, in units of exchange */
+  value: BigNumber
+  /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
+  fee: BigNumber
+}) => Promise<boolean>
+
+export const depositToUplink = (uplink: ReadyUplinks) => {
+  switch (uplink.settlerType) {
+    case SettlementEngineType.Lnd:
+      return
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.deposit(uplink)
   }
-) => Promise<boolean>
+}
+
+export const withdrawFromUplink = (uplink: ReadyUplinks) => {
+  switch (uplink.settlerType) {
+    case SettlementEngineType.Lnd:
+      return
+    case SettlementEngineType.XrpPaychan:
+      return XrpPaychan.withdraw(uplink)
+  }
+}
 
 /**
  * ------------------------------------
@@ -416,74 +417,26 @@ export type AuthorizeWithdrawal = (
  * ------------------------------------
  */
 
-/*
- * DELETING UPLINKS
- * (1) Restore credit
- * (2) Withdraw
- * (3) Disconnect
- * (4) Remove
- */
-
-/** TODO Implement this */
-export const remove = () => 3
-
-/**
- * Transfer amount prefunded to connector back to layer 2
- */
-export const restoreCredit = (state: State) => async (uplink: ReadyUplink) => {
-  // Wait for outgoing settlements to finish/be topped up
-  // TODO Add timeout?
-  await uplink.availableToDebit$
-    .pipe(first(val => val.gte(uplink.idleAvailableToDebit)))
-    .toPromise()
-
-  // TODO What if each uplink exposed a function to turn off/prevent settlements?
-  // @ts-ignore
-  uplink.plugin._balance.settleThreshold = new BigNumber(-Infinity)
-
-  // Stream prefunded amount back to self
-  await streamMoney(state)({
-    amount: uplink.availableToDebit$.getValue(),
-    source: uplink,
-    dest: uplink
-  })
-
-  // Ensure to credit is remaining on the connector
-  // TODO Add timeout?
-  await uplink.availableToDebit$.pipe(first(val => val.isZero())).toPromise()
-}
-
 /**
  * Gracefully end the session so the uplink can no longer send/receive
  */
-export const disconnect = (uplink: ReadyUplink) => {
-  // TODO Should this wait for settlements to finish?
-  stopStreamServer(uplink.streamServer).catch(err => {
-    // TODO Add log for errors!
-    console.log(err)
-  })
+export const closeUplink = async (uplink: ReadyUplinks) => {
+  await stopStreamServer(uplink.streamServer).catch(err =>
+    log.error('Error stopping Stream server: ', err)
+  )
   return uplink.plugin.disconnect()
 }
 
-// TODO Move this elsewhere? (common rxjs operators etc)
+/**
+ * ------------------------------------
+ * RXJS UTILS
+ * ------------------------------------
+ */
 
-export const sumAll = () =>
-  map((values: BigNumber[]) => values.reduce((a, b) => a.plus(b)))
-
-export const distinctBigNum = distinctUntilChanged(
-  (prev: BigNumber, cur: BigNumber) => prev.eq(cur)
+export const sumAll = map((values: BigNumber[]) =>
+  values.reduce((a, b) => a.plus(b))
 )
 
-// TODO Remove these?
-
-// TODO Add timeout/failure case?
-export const readyToDebit = (uplink: ReadyUplink): Promise<BigNumber> =>
-  uplink.availableToDebit$
-    .pipe(first(val => val.gte(uplink.idleAvailableToDebit)))
-    .toPromise()
-
-// TODO Add timeout/failure case?
-export const readyToCredit = (uplink: ReadyUplink): Promise<BigNumber> =>
-  uplink.availableToCredit$
-    .pipe(first(val => val.gte(uplink.idleAvailableToCredit)))
-    .toPromise()
+export const distinctBigNum = distinctUntilChanged(
+  (prev: BigNumber, curr: BigNumber) => prev.eq(curr)
+)

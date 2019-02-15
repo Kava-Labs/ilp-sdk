@@ -1,36 +1,34 @@
 import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
-import { State, LedgerEnv, getSettler } from '../../api'
 import BigNumber from 'bignumber.js'
-import { fromNullable, Option, tryCatch } from 'fp-ts/lib/Option'
+import { Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
   ChannelBalanceRequest,
   connectLnd,
   createInvoiceStream,
   createPaymentStream,
   GetInfoRequest,
-  LndService,
-  waitForReady,
   Invoice,
-  SendResponse,
+  InvoiceStream,
+  LndService,
   PaymentStream,
-  InvoiceStream
+  SendResponse,
+  waitForReady
 } from 'ilp-plugin-lightning'
-import { BehaviorSubject, merge, from, interval, fromEvent } from 'rxjs'
-import { map, mergeMap, throttleTime, filter, sample } from 'rxjs/operators'
+import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
+import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
-import { SettlementEngine, SettlementEngineType } from '..'
+import { LedgerEnv, SettlementModule, State } from '../..'
+import { SettlementEngine, SettlementEngineType } from '../../engine'
+import { Flavor } from '../../types/util'
 import {
-  getNativeMaxInFlight,
-  getPluginBalanceConfig,
-  getPluginMaxPacketAmount,
-  distinctBigNum,
   BaseUplink,
-  ReadyUplink,
-  BaseUplinkConfig
+  BaseUplinkConfig,
+  distinctBigNum,
+  getNativeMaxInFlight,
+  ReadyUplink
 } from '../../uplink'
 import createLogger from '../../utils/log'
 import { MemoryStore } from '../../utils/store'
-import { Flavor } from '../../types/util'
 
 /*
  * ------------------------------------
@@ -39,7 +37,9 @@ import { Flavor } from '../../types/util'
  */
 
 export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
-export const setupEngine = (ledgerEnv: LedgerEnv): LndSettlementEngine => ({
+const setupEngine = async (
+  ledgerEnv: LedgerEnv
+): Promise<LndSettlementEngine> => ({
   settlerType: SettlementEngineType.Lnd, // TODO
 
   assetCode: 'BTC',
@@ -117,25 +117,12 @@ const fetchChannelBalance = async (lightning: LndService) => {
   return convert(satoshi(res.getBalance()), btc())
 }
 
-// TODO Is this used outside of "getCredential" ?
-export const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
+const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
   cred.identityPublicKey
 
-const getCredential = (
-  state: State,
-  credentialId: LndIdentityPublicKey
-): Option<ReadyLndCredential> =>
-  fromNullable(
-    state.credentials.filter(
-      (cred): cred is ReadyLndCredential =>
-        cred.settlerType === SettlementEngineType.Lnd &&
-        uniqueId(cred) === credentialId
-    )[0]
-  )
-
-export const setupCredential = (opts: ValidatedLndCredential) => async (
-  state: State
-): Promise<ReadyLndCredential> => {
+const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
+  ReadyLndCredential
+> => {
   // Create and connect the internal LND service (passed to plugins)
   const service = connectLnd(opts)
   await waitForReady(service)
@@ -175,7 +162,7 @@ export const setupCredential = (opts: ValidatedLndCredential) => async (
   }
 }
 
-// TODO Also unsubscribe/end all of the event listeners (make sure no memory leaks)
+// TODO Also unsubscribe/end all of the event listeners (confirm there aren't any memory leaks)
 export const closeCredential = async ({ service }: ReadyLndCredential) =>
   service.close()
 
@@ -195,19 +182,21 @@ export interface LndBaseUplink extends BaseUplink {
   credentialId: LndIdentityPublicKey
 }
 
-export type ReadyLndUplink = LndBaseUplink & ReadyUplink
+export type ReadyLndUplink = LndBaseUplink & ReadyUplink // TODO 'ReadyUplink' doesn't exist!
 
-export const connectUplink = (state: State) => (
-  credential: ReadyLndCredential
-) => async (config: LndUplinkConfig): Promise<LndBaseUplink> => {
+// TODO Is the base config fine?
+const connectUplink = (credential: ReadyLndCredential) => (
+  state: State
+) => async (config: BaseUplinkConfig): Promise<LndBaseUplink> => {
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  const settler = getSettler(state)(SettlementEngineType.Lnd)! // TODO "getSettler" should automatically create the uplink
-
-  const maxInFlight = getNativeMaxInFlight(state, SettlementEngineType.Lnd)
-  const maxPacketAmount = getPluginMaxPacketAmount(maxInFlight)
-  const balance = getPluginBalanceConfig(maxInFlight)
+  // TODO Remove this?
+  // TODO Remove balance from lightning plugin?
+  const maxInFlight = await getNativeMaxInFlight(
+    state,
+    SettlementEngineType.Lnd
+  )
 
   const plugin = new LightningPlugin(
     {
@@ -220,8 +209,13 @@ export const connectUplink = (state: State) => (
       lnd: credential.service,
       paymentStream: credential.paymentStream,
       invoiceStream: credential.invoiceStream,
-      maxPacketAmount,
-      balance
+      // TODO Remove balance
+      maxPacketAmount: maxInFlight.toString(),
+      balance: {
+        maximum: maxInFlight.times(2).toString(),
+        settleTo: maxInFlight.toString(),
+        settleThreshold: '0'
+      }
     },
     {
       log: createLogger('ilp-plugin-lightning'),
@@ -229,6 +223,7 @@ export const connectUplink = (state: State) => (
     }
   )
 
+  // TODO Remove this abstraction... yuck!
   const account = await plugin.loadAccount('peer')
 
   const outgoingCapacity$ = credential.channelBalance$
@@ -236,58 +231,38 @@ export const connectUplink = (state: State) => (
   const totalReceived$ = new BehaviorSubject(new BigNumber(0))
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
 
-  const availableToDebit$ = new BehaviorSubject(new BigNumber(0))
-  account.payoutAmount$
-    .pipe(
-      // Only emit updated values
-      distinctBigNum,
-      map(amount => amount.negated()),
-      map(amount => convert(satoshi(amount), btc()))
-    )
-    // TODO Simpler way to do this? Try .subscribe(availableToDebit$) again?
-    .subscribe({
-      next: val => {
-        availableToDebit$.next(val)
-      },
-      complete: () => {
-        availableToDebit$.complete()
-      },
-      error: err => {
-        availableToDebit$.error(err)
-      }
-    })
-
-  const idleAvailableToDebit = convert(
-    settler.baseUnit(balance.settleTo),
-    settler.exchangeUnit()
-  )
-
-  const availableToCredit$ = new BehaviorSubject(new BigNumber(0))
-  account.balance$
-    .pipe(
-      // Only emit updated values
-      distinctBigNum,
-      map(amount => balance.maximum.minus(amount)),
-      map(amount => convert(satoshi(amount), btc()))
-    )
-    .subscribe(availableToCredit$)
-
-  const idleAvailableToCredit = convert(
-    settler.baseUnit(balance.maximum.minus(balance.settleTo)),
-    settler.exchangeUnit()
-  )
-
   return {
     settlerType: SettlementEngineType.Lnd,
     credentialId: uniqueId(credential),
     plugin,
     outgoingCapacity$,
     incomingCapacity$,
-    availableToDebit$,
-    idleAvailableToDebit,
-    availableToCredit$,
-    idleAvailableToCredit,
     totalSent$,
     totalReceived$
   }
+}
+
+/**
+ * ------------------------------------
+ * SETTLEMENT MODULE
+ * ------------------------------------
+ */
+
+export type LndSettlementModule = SettlementModule<
+  SettlementEngineType.Lnd,
+  LndSettlementEngine,
+  ValidatedLndCredential,
+  ReadyLndCredential,
+  // LndUplinkConfig,
+  LndBaseUplink,
+  ReadyLndUplink
+>
+
+export const Lnd: LndSettlementModule = {
+  // settlerType: SettlementEngineType.Lnd,
+  setupEngine,
+  setupCredential,
+  uniqueId,
+  closeCredential,
+  connectUplink
 }
