@@ -88,7 +88,7 @@ export interface ValidatedLndCredential {
   /** Hostname that exposes peering and gRPC server (on different ports) */
   hostname: string
   /** Port for gRPC connections */
-  grpcPort: number
+  grpcPort?: number
   /** TLS cert as a Base64-encoded string */
   tlsCert: string
   /** LND macaroon as Base64-encoded string */
@@ -214,7 +214,7 @@ const connectUplink = (credential: ReadyLndCredential) => (
       balance: {
         maximum: maxInFlight.times(2).toString(),
         settleTo: maxInFlight.toString(),
-        settleThreshold: '0'
+        settleThreshold: maxInFlight.toString() // TODO Hack for now to always attempt to settle (limited by payout amount)
       }
     },
     {
@@ -222,9 +222,6 @@ const connectUplink = (credential: ReadyLndCredential) => (
       store: new MemoryStore(store)
     }
   )
-
-  // TODO Remove this abstraction... yuck!
-  const account = await plugin.loadAccount('peer')
 
   const outgoingCapacity$ = credential.channelBalance$
   const incomingCapacity$ = new BehaviorSubject(new BigNumber(Infinity))
