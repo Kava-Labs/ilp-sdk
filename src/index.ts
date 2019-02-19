@@ -101,10 +101,10 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     uplinks: []
   }
 
-  // TODO Move functions to outside connect, have them accept a state
-
   // TODO Add functionality to connect existing uplinks based on config
   //      (unnecessary/backburner until persistence is added)
+
+  // TODO Stop returning new state from "getOrCreateCredential"
 
   const add = async (
     credentialConfig: CredentialConfigs
@@ -114,10 +114,8 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     const [readyCredential, stateWithCredential] = await getOrCreateCredential(
       state
     )(credentialConfig)
-    const [readyUplink, stateWithUplink] = await createUplink(
-      stateWithCredential
-    )(readyCredential)
-    state = stateWithUplink
+    const readyUplink = await createUplink(stateWithCredential)(readyCredential)
+    state.uplinks = [...state.uplinks, readyUplink]
     return readyUplink
   }
 
@@ -195,6 +193,9 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     disconnect
   }
 }
+
+type ThenArg<T> = T extends Promise<infer U> ? U : T
+export type Api = ThenArg<ReturnType<typeof connect>>
 
 export enum LedgerEnv {
   Mainnet = 'mainnet',
