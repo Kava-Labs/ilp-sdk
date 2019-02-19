@@ -139,7 +139,6 @@ Withdrawing from an uplink moves all funds from layer 2 back to the base layer.
 - TODO Uplinks don't presently operate an internal `ilp-connector`, which may introduce some security risks. We intend to update this after the internal plugin architecture is refactored.
 - The speed of Lightning settlements degrades significantly as the number of hops increases, and even with a direct channel between peers, is currently much slower than XRP or ETH. While we can make some minor optimizations to improve this, it's mostly inherent to Lightning.
 - Machinomy payment channels don't currently support watchtowers, which can become a security risk if a client is offline for an extended period of time and the connector disputes the channel. (In XRP, this is less of an issue, since the on-chain fees are low enough that regular checkpoints of the latest claim can be submitted to the ledger).
-- Our XRP implementation introduces some minor security issues for servers that will be resolved at a later date; clients are unaffected.
 
 ### Roadmap
 

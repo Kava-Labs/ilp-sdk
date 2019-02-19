@@ -6,7 +6,7 @@ import {
   isReject,
   serializeIlpReject
 } from 'ilp-packet'
-import { DataHandler, Logger, MoneyHandler, Plugin } from '../types/plugin'
+import { DataHandler, Logger, Plugin } from '../types/plugin'
 import { MemoryStore } from './store'
 import { defaultDataHandler } from './packet'
 import { BehaviorSubject } from 'rxjs'

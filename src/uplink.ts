@@ -185,6 +185,17 @@ export const connectUplink = (state: State) => (
     totalReceived$
   } = uplink
 
+  const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
+  const pluginWrapper = new PluginWrapper({
+    plugin,
+    maxBalance: maxInFlight,
+    maxPacketAmount: maxInFlight,
+    assetCode: settler.assetCode,
+    assetScale: settler.assetScale,
+    log: createLogger(`switch-api:${settler.assetCode}:balance`),
+    store: new MemoryStore(config.plugin.store, 'wrapper')
+  })
+
   await plugin.connect()
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
@@ -202,17 +213,6 @@ export const connectUplink = (state: State) => (
         balance$.complete()
       }
     )
-
-  const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
-  const pluginWrapper = new PluginWrapper({
-    plugin,
-    maxBalance: maxInFlight,
-    maxPacketAmount: maxInFlight,
-    assetCode: settler.assetCode,
-    assetScale: settler.assetScale,
-    log: createLogger(`switch-api:${settler.assetCode}:balance`),
-    store: new MemoryStore(config.plugin.store, 'wrapper')
-  })
 
   // TODO Add back "availableToCredit" and "availableToDebit"
   //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
