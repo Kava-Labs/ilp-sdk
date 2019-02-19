@@ -62,9 +62,7 @@ const setupEngine = async (
         'Kava Labs': (token: string) =>
           `btp+wss://:${token}@test.ilp.kava.io/xrp`
       },
-      mainnet: {
-        'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/xrp`
-      }
+      mainnet: {}
     }[ledgerEnv],
     api
   }
@@ -411,9 +409,6 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   if (outgoingChannelId) {
     await closeChannel(outgoingChannelId)
   }
-
-  await uplink.plugin.disconnect()
-  await uplink.plugin.connect()
 
   // xrp-paychan-shared occasionally throws an error when it tries to remove a pending
   // transaction from its queue after it got confirmed (something with maxLedgerVersion?)

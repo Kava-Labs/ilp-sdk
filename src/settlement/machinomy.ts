@@ -63,9 +63,7 @@ export const setupEngine = async (
         'Kava Labs': (token: string) =>
           `btp+wss://:${token}@test.ilp.kava.io/eth`
       },
-      mainnet: {
-        'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/eth`
-      }
+      mainnet: {}
     }[ledgerEnv],
     ethereumProvider
   }
