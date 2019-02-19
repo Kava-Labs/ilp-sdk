@@ -104,18 +104,12 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
   // TODO Add functionality to connect existing uplinks based on config
   //      (unnecessary/backburner until persistence is added)
 
-  // TODO Stop returning new state from "getOrCreateCredential"
-
   const add = async (
     credentialConfig: CredentialConfigs
   ): Promise<ReadyUplinks> => {
-    // TODO Is this necessary if I'm not using the settler directly?
-    const settler = state.settlers[credentialConfig.settlerType]
-    const [readyCredential, stateWithCredential] = await getOrCreateCredential(
-      state
-    )(credentialConfig)
-    const readyUplink = await createUplink(stateWithCredential)(readyCredential)
-    state.uplinks = [...state.uplinks, readyUplink]
+    const readyCredential = await getOrCreateCredential(state)(credentialConfig)
+    const readyUplink = await createUplink(state)(readyCredential)
+    state.uplinks = [...state.uplinks, readyUplink] // TODO What if the uplink is a duplicate? (throws?)
     return readyUplink
   }
 

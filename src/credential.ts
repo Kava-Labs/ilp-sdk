@@ -54,7 +54,7 @@ export const getCredential = (state: State) => <
 
 export const getOrCreateCredential = (state: State) => async (
   credentialConfig: CredentialConfigs
-): Promise<[ReadyCredentials, State]> => {
+): Promise<ReadyCredentials> => {
   const readyCredential = await setupCredential(credentialConfig)(state)
   const credentialId = getCredentialId(readyCredential)
 
@@ -63,13 +63,10 @@ export const getOrCreateCredential = (state: State) => async (
   )[0]
   if (existingCredential) {
     await closeCredential(readyCredential)
-    return [existingCredential, state]
+    return existingCredential
   } else {
-    const newState = {
-      ...state,
-      credentials: [...state.credentials, readyCredential]
-    }
-    return [readyCredential, newState]
+    state.credentials = [...state.credentials, readyCredential]
+    return readyCredential
   }
 }
 
