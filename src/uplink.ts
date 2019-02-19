@@ -125,7 +125,7 @@ export const isThatUplink = (uplink: ReadyUplinks) => (
 
 export const createUplink = (state: State) => async (
   readyCredential: ReadyCredentials
-): Promise<[ReadyUplinks, State]> => {
+): Promise<ReadyUplinks> => {
   const authToken = await generateToken()
   const settler = state.settlers[readyCredential.settlerType]
   const createServerUri = settler.remoteConnectors['Kava Labs']
@@ -157,14 +157,7 @@ export const createUplink = (state: State) => async (
     }
   }
 
-  const uplink = await connectUplink(state)(readyCredential)(config)
-  return [
-    uplink,
-    {
-      ...state,
-      uplinks: [...state.uplinks, uplink]
-    }
-  ]
+  return connectUplink(state)(readyCredential)(config)
 }
 
 export const connectBaseUplink = (
@@ -346,7 +339,7 @@ export const sendPacket = async (
     prepare.amount
   )
 
-  // If we've already prefunded enough and the amount is 0 or negative, sendMoney will simply return
+  // If we've already prefunded enough and the amount is 0 or negative, sendMoney on wrapper will simply return
   uplink.pluginWrapper
     .sendMoney(additionalPrefundRequired.toString())
     .catch(err => log.error(`Error during outgoing settlement: `, err))
@@ -395,14 +388,14 @@ export type AuthorizeDeposit = (params: {
   value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
   fee: BigNumber
-}) => Promise<boolean>
+}) => Promise<void>
 
 export type AuthorizeWithdrawal = (params: {
   /** Total amount that will move from layer 2 to layer 1, in units of exchange */
   value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
   fee: BigNumber
-}) => Promise<boolean>
+}) => Promise<void>
 
 export const depositToUplink = (uplink: ReadyUplinks) => {
   switch (uplink.settlerType) {
