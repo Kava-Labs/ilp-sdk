@@ -1,9 +1,9 @@
 # switch-api
 
-[![NPM Package](https://img.shields.io/npm/v/@kava-labs/switch-api.svg?style=popout-square&logo=npm)](https://npmjs.org/package/@kava-labs/switch-api)
-[![CircleCI](https://img.shields.io/circleci/project/github/kava-labs/switch-api.svg?style=popout-square&logo=circleci)](https://circleci.com/gh/kava-labs/switch-api)
-[![Codecov](https://img.shields.io/codecov/c/github/kava-labs/switch-api.svg?style=popout-square&logo=codecov)](https://codecov.io/gh/kava-labs/switch-api)
-[![Prettier](https://img.shields.io/badge/code_style-prettier-brightgreen.svg?style=popout-square&logo=javascript)](https://prettier.io/)
+[![NPM Package](https://img.shields.io/npm/v/@kava-labs/switch-api.svg?style=flat-square&logo=npm)](https://npmjs.org/package/@kava-labs/switch-api)
+[![CircleCI](https://img.shields.io/circleci/project/github/Kava-Labs/switch-api.svg?style=flat-square&logo=circleci)](https://circleci.com/gh/kava-labs/switch-api)
+[![Codecov](https://img.shields.io/codecov/c/github/kava-labs/switch-api.svg?style=flat-square&logo=codecov)](https://codecov.io/gh/kava-labs/switch-api)
+[![Prettier](https://img.shields.io/badge/code_style-prettier-brightgreen.svg?style=flat-square)](https://prettier.io/)
 
 ### Streaming cross-chain payments between BTC, ETH and XRP with Interledger
 
