@@ -55,6 +55,8 @@ const { state, add } = await connectSwitch()
 
 #### Machinomy
 
+TODO Machinomy uplinks use the Kovan testnet on Ethereum for its short blocktimes. A faucet is available here.
+
 ```js
 const ethUplink = await add({
   settlerType: SettlementEngineType.Machinomy,
@@ -63,6 +65,8 @@ const ethUplink = await add({
 ```
 
 #### XRP
+
+TODO To request coins on the XRP testnet, request coins here.
 
 ```js
 const xrpUplink = await add({
