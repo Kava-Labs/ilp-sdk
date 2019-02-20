@@ -175,7 +175,7 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     )
   }
 
-  // TODO Should disconnecting the API prevent other operations from occuring?
+  // TODO Should disconnecting the API prevent other operations from occuring? (they may not work anyways)
 
   return {
     state,
@@ -189,13 +189,15 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
 }
 
 type ThenArg<T> = T extends Promise<infer U> ? U : T
-export type Api = ThenArg<ReturnType<typeof connect>>
+export type SwitchApi = ThenArg<ReturnType<typeof connect>>
 
 export enum LedgerEnv {
   Mainnet = 'mainnet',
   Testnet = 'testnet',
   Local = 'local'
 }
+
+export { SettlementEngineType, ReadyUplinks }
 
 export interface State {
   readonly ledgerEnv: LedgerEnv

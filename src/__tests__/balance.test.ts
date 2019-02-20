@@ -1,20 +1,25 @@
 import { AssetUnit, convert, usd } from '@kava-labs/crypto-rate-utils'
 import anyTest, { ExecutionContext, TestInterface } from 'ava'
 import 'envkey'
-import { ReadyUplinks } from 'uplink'
-import { Api, connect, LedgerEnv } from '..'
-import { SettlementEngineType } from '../engine'
+import {
+  SwitchApi,
+  connect,
+  LedgerEnv,
+  SettlementEngineType,
+  ReadyUplinks
+} from '..'
 import BigNumber from 'bignumber.js'
+import { performance } from 'perf_hooks'
 
-const test = anyTest as TestInterface<Api>
+const test = anyTest as TestInterface<SwitchApi>
 
-export const addMachinomy = ({ add }: Api): Promise<ReadyUplinks> =>
+export const addEth = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Machinomy,
     privateKey: process.env.ETH_PRIVATE_KEY_CLIENT_1!
   })
 
-export const addLnd = ({ add }: Api): Promise<ReadyUplinks> =>
+export const addBtc = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Lnd,
     hostname: process.env.LIGHTNING_LND_HOST_CLIENT_1!,
@@ -23,7 +28,7 @@ export const addLnd = ({ add }: Api): Promise<ReadyUplinks> =>
     grpcPort: parseInt(process.env.LIGHTNING_LND_GRPCPORT_CLIENT_1!, 10)
   })
 
-export const addXrpPaychan = ({ add }: Api): Promise<ReadyUplinks> =>
+export const addXrp = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.XrpPaychan,
     secret: process.env.XRP_SECRET_CLIENT_1!
@@ -38,8 +43,8 @@ test.beforeEach(async t => {
 test.afterEach(async t => t.context.disconnect())
 
 const testFunding = (
-  createUplink: (api: Api) => Promise<ReadyUplinks>
-) => async (t: ExecutionContext<Api>) => {
+  createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
+) => async (t: ExecutionContext<SwitchApi>) => {
   const { state, deposit, withdraw, streamMoney } = t.context
   const uplink = await createUplink(t.context)
 
@@ -102,8 +107,6 @@ const testFunding = (
     'uplink can stream money to itself'
   )
 
-  // TODO Test that balance is correct
-
   await t.notThrowsAsync(
     withdraw({ uplink, authorize: () => Promise.resolve() }),
     'withdraws from channel without throwing an error'
@@ -115,31 +118,81 @@ const testFunding = (
   )
 }
 
-// test('machinomy deposits & withdrawals', testFunding(addMachinomy))
-test('xrp-paychan deposits & withdrawals', testFunding(addXrpPaychan))
+const testExchange = (
+  createSource: (api: SwitchApi) => Promise<ReadyUplinks>,
+  createDest: (api: SwitchApi) => Promise<ReadyUplinks>
+) => async (t: ExecutionContext<SwitchApi>) => {
+  const { state, deposit, streamMoney } = t.context
 
-// TODO Perform streaming exchanges for all 6 trading pairs
-//      (to make it simple, I could call deposit on each of them -- it'd just be a no-op on Lnd!)
+  const createFundedUplink = async (
+    createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
+  ) => {
+    const uplink = await createUplink(t.context)
+    await deposit({
+      uplink,
+      amount: convert(
+        usd(3),
+        state.settlers[uplink.settlerType].exchangeUnit(),
+        state.rateBackend
+      ),
+      authorize: () => Promise.resolve()
+    })
+    return uplink
+  }
 
-// const exchange = async (
-//   state: State,
-//   source: ReadyUplinks,
-//   dest: ReadyUplinks
-// ) => {
-//   const testName = `${state.settlers[
-//     source.settlerType
-//   ].assetCode.toLowerCase()} -> ${state.settlers[
-//     dest.settlerType
-//   ].assetCode.toLowerCase()}`
+  const [sourceUplink, destUplink] = await Promise.all([
+    createFundedUplink(createSource),
+    createFundedUplink(createDest)
+  ])
 
-//   test(testName, async t => {})
-// }
+  const initialSourceBalance = sourceUplink.balance$.value
+  const initialDestBalance = destUplink.balance$.value
 
-// const amountToSend = convert(usd(2), eth(), state.rateBackend)
-//   const start = performance.now()
-//   await streamMoney({
-//     amount: amountToSend,
-//     source: uplink,
-//     dest: uplink2
-//   })
-//   t.log(`time: ${performance.now() - start} ms`)
+  const sourceUnit = state.settlers[sourceUplink.settlerType].exchangeUnit
+  const destUnit = state.settlers[destUplink.settlerType].exchangeUnit
+
+  const amountToSend = convert(usd(2), sourceUnit(), state.rateBackend)
+  const start = performance.now()
+  await t.notThrowsAsync(
+    streamMoney({
+      amount: amountToSend,
+      source: sourceUplink,
+      dest: destUplink
+    })
+  )
+  t.log(`time: ${performance.now() - start} ms`)
+
+  // Wait up to 2 seconds for the final settlements to come in (sigh)
+  await new Promise(r => setTimeout(r, 2000))
+
+  const finalSourceBalance = sourceUplink.balance$.value
+  t.true(
+    initialSourceBalance.minus(amountToSend).isEqualTo(finalSourceBalance),
+    'source balance accurately represents the amount that was sent'
+  )
+
+  const estimatedReceiveAmount = convert(
+    sourceUnit(amountToSend),
+    destUnit(),
+    state.rateBackend
+  )
+  const estimatedDestFinalBalance = initialDestBalance.plus(
+    estimatedReceiveAmount
+  )
+  const finalDestBalance = destUplink.balance$.value
+  t.true(
+    finalDestBalance.isGreaterThan(estimatedDestFinalBalance.times(0.99)) &&
+      finalDestBalance.isLessThan(estimatedDestFinalBalance.times(1.01)),
+    'destination balance accounts for the amount that was sent, with margin for exchange rate fluctuations'
+  )
+}
+
+test.skip('eth deposits & withdrawals', testFunding(addEth))
+test.skip('xrp deposits & withdrawals', testFunding(addXrp))
+
+test.skip('xrp -> eth', testExchange(addXrp, addEth))
+test('xrp -> btc', testExchange(addXrp, addBtc))
+test.skip('btc -> eth', testExchange(addBtc, addEth))
+test('btc -> xrp', testExchange(addBtc, addXrp))
+test('eth -> btc', testExchange(addEth, addBtc))
+test('eth -> xrp', testExchange(addEth, addXrp))
