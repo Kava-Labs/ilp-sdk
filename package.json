@@ -20,8 +20,24 @@
     "type": "git",
     "url": "git+https://github.com/Kava-Labs/switch-api.git"
   },
+  "keywords": [
+    "ilp",
+    "interledger",
+    "cross-chain",
+    "streaming",
+    "micropayments",
+    "decentralized",
+    "exchange",
+    "non-custodial",
+    "lightning",
+    "bitcoin",
+    "ethereum",
+    "erc20",
+    "xrp",
+    "trading"
+  ],
   "author": "Kincaid O'Neil <kincaid@kava.io> (https://kincaidoneil.com/)",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/Kava-Labs/switch-api/issues"
   },
