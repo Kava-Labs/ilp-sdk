@@ -20,14 +20,14 @@ import {
   closeEngine,
   SettlementEngineType,
   SettlementEngine,
-  getOrCreateEngine,
-  SettlementEngines
+  SettlementEngines,
+  createEngine
 } from './engine'
-import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd/lnd'
+import { LndSettlementModule, LndSettlementEngine } from './settlement/lnd'
 import {
   XrpPaychanSettlementModule,
   XrpPaychanSettlementEngine
-} from './settlement/xrp-paychan/xrp-paychan'
+} from './settlement/xrp-paychan'
 import { streamMoney } from './services/switch'
 import BigNumber from 'bignumber.js'
 import {
@@ -35,8 +35,9 @@ import {
   getOrCreateCredential,
   closeCredential,
   isThatCredentialId,
-  ValidatedCredentials
+  CredentialConfigs
 } from './credential'
+import { MachinomySettlementEngine } from 'settlement/machinomy'
 
 export type SettlementModules = LndSettlementModule | XrpPaychanSettlementModule
 
@@ -46,7 +47,7 @@ export type SettlementModule<
   /** Settlements engines */
   TSettlementEngine extends SettlementEngine,
   /** Credentials */
-  TValidatedCredential extends ValidatedCredentials,
+  TValidatedCredential extends CredentialConfigs,
   TReadyCredential extends ReadyCredentials,
   /** Uplinks */
   // TODO Do the specific types for uplinks themselves actually matter, or is it really just the credential types?
@@ -79,36 +80,36 @@ export type SettlementModule<
   ) => (state: State) => (authorize: AuthorizeWithdrawal) => Promise<void>
 }
 
-export const connect = async (ledgerEnv: LedgerEnv) => {
+export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
   let state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
     maxInFlightUsd: usd(0.1),
-    settlers: {},
+    settlers: {
+      // TODO Fix the settlement engine creation ... this is bad
+      [SettlementEngineType.Lnd]: await createEngine(ledgerEnv)(
+        SettlementEngineType.Lnd
+      ),
+      [SettlementEngineType.Machinomy]: (await createEngine(ledgerEnv)(
+        SettlementEngineType.Machinomy
+      )) as MachinomySettlementEngine,
+      [SettlementEngineType.XrpPaychan]: (await createEngine(ledgerEnv)(
+        SettlementEngineType.XrpPaychan
+      )) as XrpPaychanSettlementEngine
+    },
     credentials: [],
     uplinks: []
   }
-
-  // TODO Move functions to outside connect, have them accept a state
 
   // TODO Add functionality to connect existing uplinks based on config
   //      (unnecessary/backburner until persistence is added)
 
   const add = async (
-    credentialConfig: ValidatedCredentials
+    credentialConfig: CredentialConfigs
   ): Promise<ReadyUplinks> => {
-    // TODO Is this necessary if I'm not using the settler directly?
-    const [settler, stateWithSettler] = await getOrCreateEngine(
-      state,
-      credentialConfig.settlerType
-    )
-    const [readyCredential, stateWithCredential] = await getOrCreateCredential(
-      stateWithSettler
-    )(credentialConfig)
-    const [readyUplink, stateWithUplink] = await createUplink(
-      stateWithCredential
-    )(readyCredential)
-    state = stateWithUplink
+    const readyCredential = await getOrCreateCredential(state)(credentialConfig)
+    const readyUplink = await createUplink(state)(readyCredential)
+    state.uplinks = [...state.uplinks, readyUplink] // TODO What if the uplink is a duplicate? (throws?)
     return readyUplink
   }
 
@@ -174,7 +175,7 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
     )
   }
 
-  // TODO Should disconnecting the API prevent other operations from occuring?
+  // TODO Should disconnecting the API prevent other operations from occuring? (they may not work anyways)
 
   return {
     state,
@@ -187,11 +188,16 @@ export const connect = async (ledgerEnv: LedgerEnv) => {
   }
 }
 
+type ThenArg<T> = T extends Promise<infer U> ? U : T
+export type SwitchApi = ThenArg<ReturnType<typeof connect>>
+
 export enum LedgerEnv {
   Mainnet = 'mainnet',
   Testnet = 'testnet',
   Local = 'local'
 }
+
+export { SettlementEngineType, ReadyUplinks }
 
 export interface State {
   readonly ledgerEnv: LedgerEnv
@@ -199,8 +205,10 @@ export interface State {
   readonly maxInFlightUsd: AssetUnit
   // TODO Is this simpler as an array and filter? Hard to get the types right
   settlers: {
-    lnd?: LndSettlementEngine
-    'xrp-paychan'?: XrpPaychanSettlementEngine
+    // [settlerType: keyof typeof SettlementEngineType]: SettlementEngines
+    [SettlementEngineType.Lnd]: LndSettlementEngine
+    [SettlementEngineType.Machinomy]: MachinomySettlementEngine
+    [SettlementEngineType.XrpPaychan]: XrpPaychanSettlementEngine
   }
   credentials: ReadyCredentials[]
   uplinks: ReadyUplinks[]

@@ -28,7 +28,9 @@
     // }
     "typeRoots": ["node_modules/@types", "src/types"],
     "paths": {
-      "ilp-plugin-xrp-asym-client": ["./types/ilp-plugin-xrp-asym-client"],
+      "@kava-labs/ilp-plugin-xrp-asym-client": [
+        "./types/ilp-plugin-xrp-asym-client"
+      ],
       "ilp-plugin-xrp-paychan-shared": [
         "./types/ilp-plugin-xrp-paychan-shared"
       ],

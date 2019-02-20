@@ -2,17 +2,10 @@ import BtpPlugin, {
   IlpPluginBtpConstructorOptions,
   IlpPluginBtpConstructorModules
 } from 'ilp-plugin-btp'
-import { FormattedPaymentChannel } from 'ripple-lib/dist/npm/ledger/parse/payment-channel'
+import { FormattedPaymentChannel } from 'ripple-lib'
 import { PluginStore } from 'utils/store'
 
-declare module 'ilp-plugin-xrp-asym-client' {
-  export interface PaymentChannel extends FormattedPaymentChannel {
-    /** Total amount of XRP funded in this channel */
-    amount: string
-    /** Total amount of XRP delivered by this channel (per docs) */
-    balance: string
-  }
-
+declare module '@kava-labs/ilp-plugin-xrp-asym-client' {
   export interface PaymentChannelClaim {
     /** Value of the claim, in plugin base units */
     amount: string
@@ -33,7 +26,7 @@ declare module 'ilp-plugin-xrp-asym-client' {
      */
     outgoingChannelAmountXRP?: string
     /** Should channels automatically be created and topped up? */
-    autoFundChannels?: boolean
+    autoFundChannel?: boolean
   }
 
   export interface XrpAsymClientServices
@@ -52,27 +45,45 @@ declare module 'ilp-plugin-xrp-asym-client' {
     _connect(): Promise<void>
 
     /**
+     * Open a new outgoing channel
+     * for the given amount in units of XRP
+     */
+    _createOutgoingChannel(amount: string): Promise<void>
+
+    /**
      * Deposit to an existing outgoing channel
      * for the given amount in units of XRP
      */
     _fundOutgoingChannel(amount: string): Promise<void>
 
-    /* Outgoing channel */
+    /**
+     * Share channel details with peer, request a
+     * reciprocal incoming channel, and validate it
+     */
+    _performConnectHandshake(): Promise<void>
 
-    /** Outgoing payment channel claim signature */
+    /**
+     * Submit the incoming claim to the ledger as a checkpoint,
+     * if it's profitable
+     */
+    _autoClaim(): Promise<void>
+
+    /** Outgoing payment channel claim signature and amount in base units (-9) */
     _lastClaim?: PaymentChannelClaim
+
     /** Outgoing channel id (256 bit hex) */
     _channel?: string
+
     /** Cached details from the outgoing payment channel */
-    _channelDetails?: PaymentChannel
+    _channelDetails?: FormattedPaymentChannel
 
-    /* Incoming channel */
-
-    /** Incoming payment channel claim signature */
+    /** Incoming payment channel claim signature and amount in base units (-9) */
     _bestClaim?: PaymentChannelClaim
+
     /** Incoming channel id (256 bit hex) */
     _clientChannel?: string
+
     /** Cached details from the incoming payment channel */
-    _paychan?: PaymentChannel
+    _paychan?: FormattedPaymentChannel
   }
 }

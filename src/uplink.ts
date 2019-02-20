@@ -15,23 +15,20 @@ import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
-import {
-  SettlementEngine,
-  SettlementEngineType,
-  getOrCreateEngine
-} from './engine'
-import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd/lnd'
+import { SettlementEngine, SettlementEngineType } from './engine'
+import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd'
 import {
   XrpPaychanBaseUplink,
   XrpPaychanUplinkConfig,
   XrpPaychan
-} from './settlement/xrp-paychan/xrp-paychan'
+} from './settlement/xrp-paychan'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
 import { ReadyCredentials, getCredentialId } from './credential'
 import { generateSecret, generateToken } from './utils/crypto'
+import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
 
 const log = createLogger('switch-api:uplink')
 
@@ -79,7 +76,10 @@ export interface BaseUplink {
   readonly totalSent$: BehaviorSubject<BigNumber>
 }
 
-export type BaseUplinks = LndBaseUplink | XrpPaychanBaseUplink
+export type BaseUplinks =
+  | LndBaseUplink
+  | MachinomyBaseUplink
+  | XrpPaychanBaseUplink
 
 export interface ReadyUplink {
   /** Wrapper plugin with balance logic to and perform accounting and limit the packets we fulfill */
@@ -125,12 +125,9 @@ export const isThatUplink = (uplink: ReadyUplinks) => (
 
 export const createUplink = (state: State) => async (
   readyCredential: ReadyCredentials
-): Promise<[ReadyUplinks, State]> => {
+): Promise<ReadyUplinks> => {
   const authToken = await generateToken()
-  const [settler, _] = await getOrCreateEngine(
-    state,
-    readyCredential.settlerType
-  ) // TODO Update state!
+  const settler = state.settlers[readyCredential.settlerType]
   const createServerUri = settler.remoteConnectors['Kava Labs']
   const serverUri = createServerUri(authToken)
   // const serverUriNoToken = createServerUri('') // TODO !
@@ -160,20 +157,17 @@ export const createUplink = (state: State) => async (
     }
   }
 
-  const uplink = await connectUplink(state)(readyCredential)(config)
-  return [
-    uplink,
-    {
-      ...state,
-      uplinks: [...state.uplinks, uplink]
-    }
-  ]
+  return connectUplink(state)(readyCredential)(config)
 }
 
-export const connectBaseUplink = (credential: ReadyCredentials) => {
+export const connectBaseUplink = (
+  credential: ReadyCredentials
+): ((state: State) => (config: BaseUplinkConfig) => Promise<BaseUplinks>) => {
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.connectUplink(credential)
+    case SettlementEngineType.Machinomy:
+      return Machinomy.connectUplink(credential)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.connectUplink(credential)
   }
@@ -183,21 +177,13 @@ export const connectUplink = (state: State) => (
   credential: ReadyCredentials
 ) => async (config: BaseUplinkConfig): Promise<ReadyUplinks> => {
   const uplink = await connectBaseUplink(credential)(state)(config)
-  const [settler, _] = await getOrCreateEngine(state, config.settlerType) // TODO Update state!
+  const settler = state.settlers[config.settlerType]
   const {
     plugin,
     outgoingCapacity$,
     incomingCapacity$,
     totalReceived$
   } = uplink
-
-  await plugin.connect()
-  const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
-
-  const balance$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingCapacity$, totalReceived$)
-    .pipe(sumAll)
-    .subscribe(balance$)
 
   const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
   const pluginWrapper = new PluginWrapper({
@@ -209,6 +195,24 @@ export const connectUplink = (state: State) => (
     log: createLogger(`switch-api:${settler.assetCode}:balance`),
     store: new MemoryStore(config.plugin.store, 'wrapper')
   })
+
+  await plugin.connect()
+  const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
+
+  const balance$ = new BehaviorSubject(new BigNumber(0))
+  combineLatest(outgoingCapacity$, totalReceived$)
+    .pipe(sumAll)
+    .subscribe(
+      amount => {
+        balance$.next(amount)
+      },
+      err => {
+        balance$.error(err)
+      },
+      () => {
+        balance$.complete()
+      }
+    )
 
   // TODO Add back "availableToCredit" and "availableToDebit"
   //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
@@ -335,7 +339,7 @@ export const sendPacket = async (
     prepare.amount
   )
 
-  // If we've already prefunded enough and the amount is 0 or negative, sendMoney will simply return
+  // If we've already prefunded enough and the amount is 0 or negative, sendMoney on wrapper will simply return
   uplink.pluginWrapper
     .sendMoney(additionalPrefundRequired.toString())
     .catch(err => log.error(`Error during outgoing settlement: `, err))
@@ -366,7 +370,7 @@ export const getNativeMaxInFlight = async (
   settlerType: SettlementEngineType
 ): Promise<BigNumber> => {
   const { maxInFlightUsd, rateBackend } = state
-  const [{ baseUnit }, _] = await getOrCreateEngine(state, settlerType) // TODO Update state!
+  const { baseUnit } = state.settlers[settlerType]
   return convert(maxInFlightUsd, baseUnit(), rateBackend).dp(
     0,
     BigNumber.ROUND_DOWN
@@ -384,19 +388,21 @@ export type AuthorizeDeposit = (params: {
   value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
   fee: BigNumber
-}) => Promise<boolean>
+}) => Promise<void>
 
 export type AuthorizeWithdrawal = (params: {
   /** Total amount that will move from layer 2 to layer 1, in units of exchange */
   value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
   fee: BigNumber
-}) => Promise<boolean>
+}) => Promise<void>
 
 export const depositToUplink = (uplink: ReadyUplinks) => {
   switch (uplink.settlerType) {
     case SettlementEngineType.Lnd:
       return
+    case SettlementEngineType.Machinomy:
+      return Machinomy.deposit(uplink)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.deposit(uplink)
   }
@@ -406,6 +412,8 @@ export const withdrawFromUplink = (uplink: ReadyUplinks) => {
   switch (uplink.settlerType) {
     case SettlementEngineType.Lnd:
       return
+    case SettlementEngineType.Machinomy:
+      return Machinomy.withdraw(uplink)
     case SettlementEngineType.XrpPaychan:
       return XrpPaychan.withdraw(uplink)
   }
