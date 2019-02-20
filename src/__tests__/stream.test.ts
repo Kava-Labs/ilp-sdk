@@ -191,7 +191,7 @@ test('eth deposits & withdrawals', testFunding(addEth))
 test('xrp deposits & withdrawals', testFunding(addXrp))
 
 test('xrp -> eth', testExchange(addXrp, addEth))
-test.only('xrp -> btc', testExchange(addXrp, addBtc))
+test('xrp -> btc', testExchange(addXrp, addBtc))
 test('btc -> eth', testExchange(addBtc, addEth))
 test('btc -> xrp', testExchange(addBtc, addXrp))
 test('eth -> btc', testExchange(addEth, addBtc))
