@@ -156,6 +156,10 @@ Withdrawing from an uplink moves all funds from layer 2 back to the base layer. 
 
 ### Known Issues
 
+TODO Add note about internal refactoring
+
+TODO Add note regarding custom connectors
+
 #### Persistence
 
 Currently, no state is persisted, meaning payment channels claims and credentials are not saved after the session ends. We've architected the API to enable this, and it's a top priority within the next week or two.
