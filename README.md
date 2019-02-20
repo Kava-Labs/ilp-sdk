@@ -16,6 +16,8 @@ In ~20 lines of code,
 
 ---
 
+TODO Simplify this -- kinda redundant?
+
 - Supports 3 assets: Bitcoin, using the Lightning Network; ether, using Machinomy payment channels; and XRP, using its native payment channels.
 - Streaming exchanges between assets, optimized to complete in seconds
 - Near zero counterparty risk: enables non-custodial trading. The default trust limit? 10¢.
@@ -29,11 +31,15 @@ The API is built around the concept of an uplink, which is a relationship with a
 
 Create different types of uplinks, based upon the settlement mechanism & asset:
 
-| Settlement Engine | Supported Asset(s)       |                                                         |
-| :---------------- | :----------------------- | ------------------------------------------------------- |
-| `Lnd`             | Bitcoin                  | Bitcoin Lightning Network using LND                     |
-| `Machinomy`       | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum   |
-| `XrpPaychan`      | XRP                      | Native payment channels on the XRP decentralized ledger |
+| Settlement Engine | Supported Asset(s)       |                                                       |
+| :---------------- | :----------------------- | ----------------------------------------------------- |
+| `Lnd`             | Bitcoin                  | Bitcoin Lightning Network using LND                   |
+| `Machinomy`       | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum |
+| `XrpPaychan`      | XRP                      | Native payment channels on the XRP ledger             |
+
+### Installation
+
+TODO Add an example here
 
 ### Configuration
 
@@ -52,7 +58,7 @@ const { state, add } = await connectSwitch()
 ```js
 const ethUplink = await add({
   settlerType: SettlementEngineType.Machinomy,
-  ethereumPrivateKey: 'TODO'
+  privateKey: '36fa71e0c8b177cc170e06e59abe8c83db1db0bae53a5f89624a891fd3c285a7'
 })
 ```
 
@@ -61,7 +67,7 @@ const ethUplink = await add({
 ```js
 const xrpUplink = await add({
   settlerType: SettlementEngineType.XrpPaychan,
-  xrpSecret: 'TODO'
+  secret: 'ssPr1eagnXCFdD8xJsGXwTBr29pFF'
 })
 ```
 
@@ -69,8 +75,12 @@ const xrpUplink = await add({
 
 ```js
 const btcUplink = await add({
-  settlerType: SettlementEngineType.Lnd
-  // TODO Add examples here! (use lndconnect example)
+  settlerType: SettlementEngineType.Lnd,
+  hostname: 'localhost',
+  macaroon:
+    'AgEDbG5kArsBAwoQ3/I9f6kgSE6aUPd85lWpOBIBMBoWCgdhZGRyZXNzEgRyZWFkEgV3cml0ZRoTCgRpbmZvEgRyZWFkEgV32ml0ZRoXCghpbnZvaWNlcxIEcmVhZBIFd3JpdGUaFgoHbWVzc2FnZRIEcmVhZBIFd3JpdGUaFwoIb2ZmY2hhaW4SBHJlYWQSBXdyaXRlGhYKB29uY2hhaW4SBHJlYWQSBXdyaXRlGhQKBXBlZXJzEgRyZWFkEgV3cml0ZQAABiAiUTBv3Eh6iDbdjmXCfNxp4HBEcOYNzXhrm+ncLHf5jA==',
+  tlsCert:
+    'LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUNpRENDQWkrZ0F3SUJBZ0lRZG81djBRQlhIbmppNGhSYWVlTWpOREFLQmdncWhrak9QUVFEQWpCSE1SOHcKSFFZRFZRUUtFeFpzYm1RZ1lYVjBiMmRsYm1WeVlYUmxaQ0JqWlhKME1TUXdJZ1lEVlFRREV4dEtkWE4wZFhOegpMVTFoWTBKdmIyc3RVSEp2TFRNdWJHOWpZV3d3SGhjTk1UZ3dPREl6TURVMU9ERXdXaGNOTVRreE1ERTRNRFUxCk9ERXdXakJITVI4d0hRWURWUVFLRXhac2JtUWdZWFYwYjJkbGJtVnlZWFJsWkNCalpYSjBNU1F3SWdZRFZRUUQKRXh0S2RYTjBkWE56TFUxaFkwSnZiMnN0VUhKdkxUTXViRzlqWVd3d1dUQVRCZ2NxaGtqT1BRSUJCZ2dxaGtpTwpQUU1CQndOQ0FBU0ZoUm0rdy9UMTBQb0t0ZzRsbTloQk5KakpENDczZmt6SHdQVUZ3eTkxdlRyUVNmNzU0M2oyCkpyZ0ZvOG1iVFYwVnRwZ3FrZksxSU1WS01MckYyMXhpbzRIOE1JSDVNQTRHQTFVZER3RUIvd1FFQXdJQ3BEQVAKQmdOVkhSTUJBZjhFQlRBREFRSC9NSUhWQmdOVkhSRUVnYzB3Z2NxQ0cwcDFjM1IxYzNNdFRXRmpRbTl2YXkxUQpjbTh0TXk1c2IyTmhiSUlKYkc5allXeG9iM04wZ2dSMWJtbDRnZ3AxYm1sNGNHRmphMlYwaHdSL0FBQUJoeEFBCkFBQUFBQUFBQUFBQUFBQUFBQUFCaHhEK2dBQUFBQUFBQUFBQUFBQUFBQUFCaHhEK2dBQUFBQUFBQUF3bGM5WmMKazdiRGh3VEFxQUVFaHhEK2dBQUFBQUFBQUJpTnAvLytHeFhHaHhEK2dBQUFBQUFBQUtXSjV0bGlET1JqaHdRSwpEd0FDaHhEK2dBQUFBQUFBQUc2V3ovLyszYXRGaHhEOTJ0RFF5djRUQVFBQUFBQUFBQkFBTUFvR0NDcUdTTTQ5CkJBTUNBMGNBTUVRQ0lBOU85eHRhem1keENLajBNZmJGSFZCcTVJN0pNbk9GUHB3UlBKWFFmcllhQWlCZDVOeUoKUUN3bFN4NUVDblBPSDVzUnB2MjZUOGFVY1hibXlueDlDb0R1ZkE9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=='
 })
 ```
 
@@ -118,27 +128,50 @@ Emits the total balance in layer 2 that can be claimed on the base ledger if the
 
 At it's core, the API enables streaming exchanges between assets with very limited counterparty risk.
 
-When trading between assets, a very small amount of the source/sending asset (the equivalent of \$0.05 USD, by default) is prefunded in advance of the the connector sending the destination/receiving asset. If at any point the connector stops sending or sends too little of the destination asset, the stream is stopped, and the total losses are capped at twice the prefund (although the cost of the on-chain transactions to create/close the channels must also be accounted for). This effectively enables non-custodial trading, since the counterparty risk can be set arbitrarily low.
+#### Non-custodial Trading
 
-TODO This can be changed so it's capped directly at the prefund, and not twice the prefund!
+When trading between assets, a very small amount of the source/sending asset (the equivalent of \$0.05 USD, by default) is prefunded in advance of the the connector sending the destination/receiving asset. If at any point the connector stops sending or sends too little of the destination asset, the stream is stopped, effectively enabling non-custodial trading, since the counterparty risk can be set arbitrarily low.
 
-To determine the exchange rate, the API uses a price oracle (currently CoinCap, although more may be supported in the future), and rejects packets if they drop below that, minus a configurable slippage margin. The acceptable exchange rate is constantly updated in the background to account for market flucuations.
+#### Exchange Rates
+
+Switch uses a price oracle to fetch exchange rates, and rejects packets if they drop below that rate, minus a configurable slippage margin. (Currently [CoinCap](https://coincap.io/) is used, although more oracles may be supported in the future). The acceptable exchange rate is constantly updated in the background to account for market fluctuations.
+
+#### Performance
 
 TODO Speeeeeed! (Include benchmarks?)
 
-TODO Example of streaming exchange
+#### Example
+
+```js
+// TODO Example of streaming exchange
+```
 
 ### Withdraw
 
-Withdrawing from an uplink moves all funds from layer 2 back to the base layer.
+Withdrawing from an uplink moves all funds from layer 2 back to the base layer. An upink can no longer be used after funds are withdrawn and should be removed.
+
+```js
+// TODO Add an example here!
+```
 
 ### Known Issues
 
-- Currently, no state is persisted, meaning payment channels claims and credentials are not saved after the session ends. We've architected the API to enable this, and it's a top priority within the next week or two.
-- By design, clients do not currently pay for incoming capacity on ETH nor XRP. However, that's not a sustainable solution. In order to scale and prevent liquidity denial of service attacks, clients should pay a fee to "buy" incoming capacity/bandwidth for a period of time. However, this negotiation and accounting adds a great deal of complexity.
-- TODO Uplinks don't presently operate an internal `ilp-connector`, which may introduce some security risks. We intend to update this after the internal plugin architecture is refactored.
-- The speed of Lightning settlements degrades significantly as the number of hops increases, and even with a direct channel between peers, is currently much slower than XRP or ETH. While we can make some minor optimizations to improve this, it's mostly inherent to Lightning.
+#### Persistence
+
+Currently, no state is persisted, meaning payment channels claims and credentials are not saved after the session ends. We've architected the API to enable this, and it's a top priority within the next week or two.
+
+#### DoS Attacks
+
+By design, clients do not currently pay for incoming capacity on ETH nor XRP. However, that's not a sustainable solution. In order to scale and prevent liquidity denial of service attacks, clients should pay a fee to "buy" incoming capacity/bandwidth for a period of time. However, this negotiation and accounting adds a great deal of complexity.
+
+#### Security
+
+- Uplinks don't operate an internal `ilp-connector`, which may introduce some minor security risks. We intend to update this after the internal plugin architecture is refactored.
 - Machinomy payment channels don't currently support watchtowers, which can become a security risk if a client is offline for an extended period of time and the connector disputes the channel. (In XRP, this is less of an issue, since the on-chain fees are low enough that regular checkpoints of the latest claim can be submitted to the ledger).
+
+#### Performance
+
+The speed of Lightning settlements degrades significantly as the number of hops increases, and even with a direct channel between peers, is currently much slower than XRP or ETH. We can make some optimizations (albeit minor) to improve this.
 
 ### Roadmap
 
