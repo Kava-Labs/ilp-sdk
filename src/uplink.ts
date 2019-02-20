@@ -200,7 +200,10 @@ export const connectUplink = (state: State) => (
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
   const balance$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingCapacity$, totalReceived$)
+  combineLatest(
+    outgoingCapacity$.pipe(distinctBigNum),
+    totalReceived$.pipe(distinctBigNum)
+  )
     .pipe(sumAll)
     .subscribe(
       amount => {
@@ -214,17 +217,17 @@ export const connectUplink = (state: State) => (
       }
     )
 
+  const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
+  incomingCapacity$.pipe(distinctBigNum).subscribe(availableToReceive$)
+
+  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
+  outgoingCapacity$.pipe(distinctBigNum).subscribe(availableToSend$)
+
   // TODO Add back "availableToCredit" and "availableToDebit"
   //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
 
   // TODO Also, credit extended should NOT be included in incoming capacity since
   //      the peer needs the capacity to send us the settlement for that -- it should be subtracted!
-
-  const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
-  incomingCapacity$.subscribe(availableToReceive$)
-
-  const availableToSend$ = new BehaviorSubject(new BigNumber(0))
-  outgoingCapacity$.subscribe(availableToSend$)
 
   const handlers: {
     streamServerHandler: DataHandler
@@ -446,5 +449,5 @@ export const sumAll = map((values: BigNumber[]) =>
 )
 
 export const distinctBigNum = distinctUntilChanged(
-  (prev: BigNumber, curr: BigNumber) => prev.eq(curr)
+  (prev: BigNumber, curr: BigNumber) => prev.isEqualTo(curr)
 )

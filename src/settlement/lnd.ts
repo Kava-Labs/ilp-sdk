@@ -23,7 +23,6 @@ import { Flavor } from '../types/util'
 import {
   BaseUplink,
   BaseUplinkConfig,
-  distinctBigNum,
   getNativeMaxInFlight,
   ReadyUplink
 } from '../uplink'
@@ -144,9 +143,7 @@ const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
     .pipe(
       // Limit balance requests to 10 per second
       throttleTime(100),
-      mergeMap(() => from(fetchChannelBalance(service))),
-      // Only emit updated values
-      distinctBigNum
+      mergeMap(() => from(fetchChannelBalance(service)))
     )
     .subscribe(channelBalance$)
 

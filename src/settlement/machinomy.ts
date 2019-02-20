@@ -13,8 +13,7 @@ import {
   AuthorizeWithdrawal,
   ReadyUplink,
   BaseUplinkConfig,
-  BaseUplink,
-  distinctBigNum
+  BaseUplink
 } from '../uplink'
 import { MemoryStore } from '../utils/store'
 import Web3 from 'web3'
@@ -161,7 +160,6 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(spentFromChannel),
-      distinctBigNum,
       toEth
     )
     .subscribe(totalSent$)
@@ -170,7 +168,6 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(remainingInChannel),
-      distinctBigNum,
       toEth
     )
     .subscribe(outgoingCapacity$)
@@ -182,7 +179,6 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   )
     .pipe(
       map(spentFromChannel),
-      distinctBigNum,
       toEth
     )
     .subscribe(totalReceived$)
@@ -194,7 +190,6 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   )
     .pipe(
       map(remainingInChannel),
-      distinctBigNum,
       toEth
     )
     .subscribe(incomingCapacity$)

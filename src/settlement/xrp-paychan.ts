@@ -17,7 +17,6 @@ import {
   AuthorizeWithdrawal,
   BaseUplink,
   BaseUplinkConfig,
-  distinctBigNum,
   ReadyUplink
 } from '../uplink'
 import createLogger from '../utils/log'
@@ -198,7 +197,6 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
   observeProp('_lastClaim')
     .pipe(
       getValue,
-      distinctBigNum,
       toXrp
     )
     .subscribe(outgoingClaimAmount$)
@@ -224,7 +222,6 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
   observeProp('_bestClaim')
     .pipe(
       getValue,
-      distinctBigNum,
       toXrp
     )
     .subscribe(incomingClaimAmount$)
