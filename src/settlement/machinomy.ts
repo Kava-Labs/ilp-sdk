@@ -24,7 +24,7 @@ import { SettlementEngine, SettlementEngineType } from '../engine'
 import { fetchGasPrice } from './shared/eth'
 import { LedgerEnv, State, SettlementModule } from '..'
 import { BehaviorSubject, fromEvent } from 'rxjs'
-import { map } from 'rxjs/operators'
+import { map, timeout, first } from 'rxjs/operators'
 
 /**
  * ------------------------------------
@@ -230,8 +230,8 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
   amount: BigNumber
   authorize: AuthorizeDeposit
 }) => {
-  const fundAmountGwei = convert(eth(amount), gwei())
-  await uplink.pluginAccount.fundOutgoingChannel(fundAmountGwei, async fee => {
+  const fundAmountWei = convert(eth(amount), wei())
+  await uplink.pluginAccount.fundOutgoingChannel(fundAmountWei, async fee => {
     // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
 
     await authorize({
@@ -240,10 +240,13 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
     })
   })
 
-  // Inform the peer so they can link the channel
-  await uplink.plugin.sendMoney('0')
-
-  // TODO Add functionality to request/get incoming capacity!
+  // Wait up to 1 minute for incoming capacity to be created
+  await uplink.incomingCapacity$
+    .pipe(
+      first(amount => amount.isGreaterThan(0)),
+      timeout(60000)
+    )
+    .toPromise()
 }
 
 const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
@@ -264,7 +267,7 @@ const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
   // Simultaneously withdraw and request incoming capacity to be removed
   await Promise.all([claimChannel, requestClose])
 
-  // TODO Also, confirm the incoming capacity has been closed -- or attempt to dispute it?
+  // TODO Confirm the incoming capacity has been closed -- or attempt to dispute it?
 }
 
 /**

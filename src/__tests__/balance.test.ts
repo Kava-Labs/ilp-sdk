@@ -187,12 +187,12 @@ const testExchange = (
   )
 }
 
-test.skip('eth deposits & withdrawals', testFunding(addEth))
-test.skip('xrp deposits & withdrawals', testFunding(addXrp))
+test('eth deposits & withdrawals', testFunding(addEth))
+test('xrp deposits & withdrawals', testFunding(addXrp))
 
-test.skip('xrp -> eth', testExchange(addXrp, addEth))
+test('xrp -> eth', testExchange(addXrp, addEth))
 test('xrp -> btc', testExchange(addXrp, addBtc))
-test.skip('btc -> eth', testExchange(addBtc, addEth))
+test('btc -> eth', testExchange(addBtc, addEth))
 test('btc -> xrp', testExchange(addBtc, addXrp))
 test('eth -> btc', testExchange(addEth, addBtc))
 test('eth -> xrp', testExchange(addEth, addXrp))
