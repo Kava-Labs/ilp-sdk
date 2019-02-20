@@ -256,7 +256,9 @@ const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
     false,
     async (channel, fee) => {
       await authorize({
-        value: uplink.outgoingCapacity$.value.plus(channel.spent),
+        value: uplink.outgoingCapacity$.value.plus(
+          convert(wei(channel.spent), eth())
+        ),
         fee: convert(wei(fee), eth())
       })
     }
