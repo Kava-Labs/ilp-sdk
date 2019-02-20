@@ -1,8 +1,8 @@
 import { convert, drop, xrp, xrpBase } from '@kava-labs/crypto-rate-utils'
-import BigNumber from 'bignumber.js'
 import XrpAsymClient, {
   PaymentChannelClaim
 } from '@kava-labs/ilp-plugin-xrp-asym-client'
+import BigNumber from 'bignumber.js'
 import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { FormattedPaymentChannel, RippleAPI } from 'ripple-lib'
@@ -332,7 +332,8 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
     +fee
   const currentBalance = +xrpBalance
   if (currentBalance < minBalance) {
-    throw new InsufficientFundsError() // TODO Fix this
+    // TODO Return a specific type of error
+    throw new Error('insufficient funds')
   }
 
   // TODO Add accounting for fees from autoClaim and such!
