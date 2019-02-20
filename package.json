@@ -51,8 +51,6 @@
     "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
     "ethereumjs-util": "^6.1.0",
-    "eventemitter2": "^5.0.1",
-    "eventemitter3": "^3.1.0",
     "fp-ts": "^1.13.0",
     "ilp-packet": "^3.0.8",
     "ilp-plugin-ethereum": "^3.0.0-beta.12",
@@ -64,8 +62,11 @@
     "ripple-keypairs": "^0.11.0",
     "ripple-lib": "^1.1.2",
     "rxjs": "^6.4.0",
-    "unionize": "^2.1.2",
     "web3": "1.0.0-beta.37"
+  },
+  "peerDependencies": {
+    "bignumber.js": "7.x",
+    "rxjs": "6.x"
   },
   "devDependencies": {
     "@types/google-protobuf": "^3.2.7",
