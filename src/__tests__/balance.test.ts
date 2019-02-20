@@ -37,7 +37,7 @@ export const addXrp = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
 // Before & after each test, construct and disconnect the API
 
 test.beforeEach(async t => {
-  t.context = await connect(LedgerEnv.Local)
+  t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
 test.afterEach(async t => t.context.disconnect())
@@ -191,7 +191,7 @@ test('eth deposits & withdrawals', testFunding(addEth))
 test('xrp deposits & withdrawals', testFunding(addXrp))
 
 test('xrp -> eth', testExchange(addXrp, addEth))
-test('xrp -> btc', testExchange(addXrp, addBtc))
+test.only('xrp -> btc', testExchange(addXrp, addBtc))
 test('btc -> eth', testExchange(addBtc, addEth))
 test('btc -> xrp', testExchange(addBtc, addXrp))
 test('eth -> btc', testExchange(addEth, addBtc))

@@ -80,7 +80,7 @@ export type SettlementModule<
   ) => (state: State) => (authorize: AuthorizeWithdrawal) => Promise<void>
 }
 
-export const connect = async (ledgerEnv: LedgerEnv) => {
+export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
   let state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
