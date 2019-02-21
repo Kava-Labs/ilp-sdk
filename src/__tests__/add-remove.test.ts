@@ -1,6 +1,12 @@
 import anyTest, { TestInterface, ExecutionContext } from 'ava'
 import 'envkey'
-import { SwitchApi, connect, LedgerEnv, ReadyUplinks } from '..'
+import {
+  SwitchApi,
+  connect,
+  LedgerEnv,
+  SettlementEngineType,
+  ReadyUplinks
+} from '..'
 import { addXrp, addEth, addBtc, testExchange } from './_helpers'
 
 const test = anyTest as TestInterface<SwitchApi>
@@ -26,3 +32,33 @@ const testAddRemove = (
 test('add then remove btc', testAddRemove(addBtc(1)))
 test('add then remove eth without deposit', testAddRemove(addEth(1)))
 test('add then remove xrp without deposit', testAddRemove(addXrp(1)))
+
+
+// TODO expand input validation tests
+test('add with nonsense xrp secret throws', async t => {
+  await t.throwsAsync(
+    t.context.add({
+      settlerType: SettlementEngineType.XrpPaychan,
+      secret: 'this is not an xrp secret'
+    })
+  )
+})
+test('add with nonsense eth secret throws', async t => {
+  await t.throwsAsync(
+    t.context.add({
+      settlerType: SettlementEngineType.Machinomy,
+      privateKey: 'this is not an eth secret'
+    })
+  )
+})
+test('add with nonsense lnd credentials throws', async t => {
+  await t.throwsAsync(
+    t.context.add({
+      settlerType: SettlementEngineType.Lnd,
+      hostname: 'nonsense',
+      tlsCert: 'nonsense',
+      macaroon: 'nonsense',
+      grpcPort: 12345
+    })
+  )
+})
