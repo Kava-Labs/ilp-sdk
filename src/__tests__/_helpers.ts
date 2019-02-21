@@ -144,6 +144,10 @@ export const testExchange = (
     createFundedUplink(createDest)
   ])
 
+  // Without this pause after creating the uplinks, a stream from lnd to lnd fails.
+  // TODO fix
+  await new Promise(r => setTimeout(r, 500))
+
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
 

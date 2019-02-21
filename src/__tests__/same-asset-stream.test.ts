@@ -1,6 +1,6 @@
 import anyTest, { TestInterface } from 'ava'
 import 'envkey'
-import { SwitchApi, connect, LedgerEnv } from '..'
+import { SwitchApi, connect, LedgerEnv, ReadyUplinks } from '..'
 import { addXrp, addEth, addBtc, testExchange } from './_helpers'
 
 const test = anyTest as TestInterface<SwitchApi>
@@ -13,6 +13,6 @@ test.beforeEach(async t => {
 
 test.afterEach(async t => t.context.disconnect())
 
-// test('xrp -> xrp', testExchange(addXrp(1), addXrp(2)))
+test('xrp -> xrp', testExchange(addXrp(1), addXrp(2)))
 test('eth -> eth', testExchange(addEth(1), addEth(2)))
-// test('btc -> btc', testExchange(addBtc(2), addBtc(1)))
+test('btc -> btc', testExchange(addBtc(2), addBtc(1)))
