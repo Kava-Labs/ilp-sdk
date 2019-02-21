@@ -13,9 +13,9 @@ test.beforeEach(async t => {
 
 test.afterEach(async t => t.context.disconnect())
 
-test('xrp -> xrp', testExchange(addXrp(1), addXrp(2)))
-test('eth -> eth', testExchange(addEth(1), addEth(2)))
-test('btc -> btc', testExchange(addBtc(2), addBtc(1)))
+test('xrp -> xrp different credentials', testExchange(addXrp(1), addXrp(2)))
+test('eth -> eth different credentials', testExchange(addEth(1), addEth(2)))
+test('btc -> btc different credentials', testExchange(addBtc(2), addBtc(1)))
 
 test('xrp -> xrp same credentials', testExchange(addXrp(1), addXrp(1)))
 test('eth -> eth same credentials', testExchange(addEth(1), addEth(1)))

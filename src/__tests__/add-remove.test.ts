@@ -24,5 +24,5 @@ const testAddRemove = (
 }
 
 test('add then remove btc', testAddRemove(addBtc(1)))
-test('add then remove eth', testAddRemove(addEth(1)))
-test('add then remove xrp', testAddRemove(addXrp(1)))
+test('add then remove eth without deposit', testAddRemove(addEth(1)))
+test('add then remove xrp without deposit', testAddRemove(addXrp(1)))
