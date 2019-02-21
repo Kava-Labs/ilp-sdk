@@ -16,10 +16,9 @@ test.afterEach(async t => t.context.disconnect())
 const testAddRemove = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<SwitchApi>) => {
-
   const uplink = await createUplink(t.context)
   t.true(t.context.state.uplinks.includes(uplink))
-  
+
   await t.context.remove(uplink)
   t.false(t.context.state.uplinks.includes(uplink))
 }
