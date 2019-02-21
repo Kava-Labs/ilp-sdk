@@ -42,7 +42,7 @@ test.beforeEach(async t => {
 
 test.afterEach(async t => t.context.disconnect())
 
-const testFunding = (
+export const testFunding = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<SwitchApi>) => {
   const { state, deposit, withdraw, streamMoney } = t.context
@@ -118,7 +118,7 @@ const testFunding = (
   )
 }
 
-const testExchange = (
+export const testExchange = (
   createSource: (api: SwitchApi) => Promise<ReadyUplinks>,
   createDest: (api: SwitchApi) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<SwitchApi>) => {
