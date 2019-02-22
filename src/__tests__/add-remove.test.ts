@@ -33,7 +33,6 @@ test('add then remove btc', testAddRemove(addBtc(1)))
 test('add then remove eth without deposit', testAddRemove(addEth(1)))
 test('add then remove xrp without deposit', testAddRemove(addXrp(1)))
 
-
 // TODO expand input validation tests
 test('add with nonsense xrp secret throws', async t => {
   await t.throwsAsync(

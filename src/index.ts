@@ -150,13 +150,15 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
     state.uplinks = state.uplinks.filter(el => !isThatUplink(uplink)(el))
 
     // Remove the credential
-    const credentials = state.credentials.filter(
+    const credentialsToClose = state.credentials.filter(
       isThatCredentialId(internalUplink.credentialId, uplink.settlerType)
     )
-    await Promise.all(credentials.map(closeCredential))
-    state.credentials = state.credentials.filter(c => !credentials.includes(c))
+    await Promise.all(credentialsToClose.map(closeCredential))
+    state.credentials = state.credentials.filter(
+      someCredential => !credentialsToClose.includes(someCredential)
+    )
 
-    // TODO Close engine, if there aren't any other credentials that rely on it
+    // TODO Close engine, if there aren't any other credentials that rely on it?
   }
 
   const disconnect = async () => {
