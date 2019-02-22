@@ -24,11 +24,11 @@ The API is built around the concept of an uplink, which is a relationship with a
 
 Create different types of uplinks, based upon the settlement mechanism & asset:
 
-| Uplink Type       | Supported Asset(s)       | Settlement Mechanism                                  |
-| :---------------- | :----------------------- | :---------------------------------------------------- |
-| `Lnd`             | Bitcoin                  | Bitcoin Lightning Network using LND                   |
-| `Machinomy`       | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum |
-| `XrpPaychan`      | XRP                      | Native payment channels on the XRP ledger             |
+| Uplink Type  | Supported Asset(s)       | Settlement Mechanism                                  |
+| :----------- | :----------------------- | :---------------------------------------------------- |
+| `Lnd`        | Bitcoin                  | Bitcoin Lightning Network using LND                   |
+| `Machinomy`  | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum |
+| `XrpPaychan` | XRP                      | Native payment channels on the XRP ledger             |
 
 By default, the API connects to the Kava testnet connector; user-defined connectors will be supported in the near future. However, Kava's [connector configuration](https://github.com/kava-labs/connector-config) is open-source, enabling you to run a local connector for development.
 
@@ -106,12 +106,15 @@ The behavior is slightly different depending upon the type of settlement.
 await api.deposit({
   /** Uplink to deposit to */
   uplink: ethUplink,
-  
-  /** Amount to deposit, in units of exchange */
+
+  /**
+   * Amount to deposit, in the unit of exchange
+   * (e.g. in this case, ether; not gwei or wei)
+   */
   amount: new BigNumber(0.05),
-  
+
   /** Callback to authorize the fee and amount to be transferred from layer 1, after it's calculated */
-  authorize: (params: { fee: BigNumber, value: BigNumber }): Promise<any> => {
+  authorize: (params: { fee: BigNumber; value: BigNumber }): Promise<any> => {
     /**
      * Resolve the promise to continue the deposit,
      * or reject the promise to cancel it
@@ -157,24 +160,25 @@ Switch uses a price oracle to fetch exchange rates, and rejects packets if they 
 
 Trades using streaming micropayments are _fast_.
 
-Here are some unscientific benchmarks:
+Here are some unscientific benchmarks in optimal conditions to send \$2 of the source asset:
 
-- These were taken from [CircleCI](https://circleci.com/gh/Kava-Labs/switch-api/3#tests/containers/0) (likely hosted in AWS) using Kava's testnet connector (hosted in AWS). However, we've experienced similar results with a very low-latency internet connection.
-- Sending $2 in the source asset, $0.05 as the amount prefunded/maximum in-flight, so ~40 packets/roundtrips were required
-- Only a single trial
+| Source | Destination | Time (ms) | Value per second |
+| :----- | :---------- | :-------- | :--------------- |
+| ETH    | XRP         | 150.1     | 266x trust limit |
+| XRP    | ETH         | 196.4     | 203x trust limit |
+| XRP    | BTC         | 3119.6    | 13x trust limit  |
+| ETH    | BTC         | 3048.0    | 13x trust limit  |
+| BTC    | ETH         | 3822.9    | 10x trust limit  |
+| BTC    | XRP         | 3962.2    | 10x trust limit  |
 
-Source | Destination | Time (ms) | Value per second
-:-- | :-- | :-- | :--
-ETH | XRP | 150.1 | 266x max in flight
-XRP | ETH | 196.4 | 203x max in flight
-XRP | BTC | 3119.6 | 13x max in flight
-ETH | BTC | 3048.0 | 13x max in flight
-BTC | ETH | 3822.9 | 10x max in flight
-BTC | XRP | 3962.2 | 10x max in flight
+- These were taken from [this test in CircleCI](https://circleci.com/gh/Kava-Labs/switch-api/3) (likely hosted in AWS) using Kava's testnet connector (hosted in AWS). Your mileage may vary. However, for peers _very_ close in proximity to one another, the results are remarkable.
+- \$0.05 was the amount prefunded/trust limit, so ~40 packets/roundtrips were required for each payment
 
-The key metric is "value per second," or if you only trust your peer for _x_, or much money can you move in one second? In the case of the XRP/ETH pairs, sometimes as high as **200 times** your trust limit can be transferred, _per second_. By contrast, Lightning settlements, even with direct channel, are fairly slow.
+The key metric is "value per second," or if you only trust your peer for _x_, how much money can you move in one second? In the case of the XRP/ETH pairs, sometimes as high as **200 times** your trust limit can be transferred, _per second_. Under real world conditions, that's likely hard to attain, but with a very low-latency internet connection, several dozen times the trust limit per second is possible.
 
-(Note: logging also slows streaming performance down significantly).
+The bottom line: the latency of settlements is critical in how long a payment takes. In the case of ETH and XRP, the latency is the time it takes to send a message to the peer. In the case of Lightning, individual settlements take longer so the entire payment takes longer: they involve the latency from the sender, to their LND node (likely remote), over some number of hops in the Lightning network (which can be quite slow), to the peer's LND node, to the peer's connector. If there are intermediary hops in Interledger, it may also take longer, although they likely wouldn't be limited by the speed of settlements, since the service providers in the middle likely have higher trust between one another.
+
+(Note: logging can also significantly slow streaming performance).
 
 #### Example
 
@@ -182,13 +186,13 @@ The key metric is "value per second," or if you only trust your peer for _x_, or
 await api.streamMoney({
   /** Amount to send in units of exchange of the source uplink */
   amount: new BigNumber(0.02),
-  
+
   /** Sending uplink */
   source: ethUplink,
-  
+
   /** Receiving uplink */
   dest: xrpUplink,
-  
+
   /** Optionally, specify a maximum slippage margin against the most recently fetched exchange rate */
   slippage: 0.02
 })
@@ -196,15 +200,15 @@ await api.streamMoney({
 
 ### Withdraw
 
-Withdrawing from an uplink moves all funds from layer 2 back to the base layer. An upink can no longer be used after funds are withdrawn and should be removed.
+Withdrawing from an uplink moves all funds from layer 2 back to the base layer. An uplink can no longer be used after funds are withdrawn and should be removed.
 
 ```typescript
 await api.withdraw({
   /** Uplink to withdraw from */
   uplink: ethUplink,
- 
+
   /** Callback to authorize the fee and amount to be transferred to layer 1, after it's calculated */
-  authorize: (params: { fee: BigNumber, value: BigNumber }): Promise<any> => {
+  authorize: (params: { fee: BigNumber; value: BigNumber }): Promise<any> => {
     /**
      * Resolve the promise to continue the withdrawal,
      * or reject the promise to cancel it
