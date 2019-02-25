@@ -137,7 +137,7 @@ export const createUplink = (state: State) => async (
     someUplink =>
       someUplink.credentialId === credentialId &&
       someUplink.settlerType === readyCredential.settlerType &&
-      false // TODO This MUST comapre the connector it's connected to!
+      true // TODO This MUST compare the connector it's connected to!
   )
   if (alreadyExists) {
     throw new Error('Cannot create duplicate uplink')
