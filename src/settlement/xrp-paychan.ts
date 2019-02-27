@@ -9,7 +9,7 @@ import { FormattedPaymentChannel, RippleAPI } from 'ripple-lib'
 import { BehaviorSubject, combineLatest, Observable, Subject } from 'rxjs'
 import { filter, map } from 'rxjs/operators'
 import { Flavor } from 'types/util'
-import { LedgerEnv, SettlementModule, State } from '..'
+import { LedgerEnv, State } from '..'
 import { isThatCredentialId } from '../credential'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import {
@@ -31,7 +31,8 @@ const log = createLogger('switch-api:xrp-paychan')
  */
 
 export interface XrpPaychanSettlementEngine extends SettlementEngine {
-  api: RippleAPI
+  readonly settlerType: SettlementEngineType.XrpPaychan
+  readonly api: RippleAPI
 }
 
 const getXrpServerWebsocketUri = (ledgerEnv: LedgerEnv): string =>
@@ -67,6 +68,10 @@ const setupEngine = async (
   }
 }
 
+export const closeXrpPaychanEngine = ({
+  api
+}: XrpPaychanSettlementEngine): Promise<void> => api.disconnect()
+
 /**
  * ------------------------------------
  * CREDENTIAL
@@ -74,15 +79,15 @@ const setupEngine = async (
  */
 
 export type UnvalidatedXrpSecret = {
-  settlerType: SettlementEngineType.XrpPaychan
-  secret: string
+  readonly settlerType: SettlementEngineType.XrpPaychan
+  readonly secret: string
 }
 
 export type ValidatedXrpSecret = Flavor<
   {
-    settlerType: SettlementEngineType.XrpPaychan
-    secret: string
-    address: string
+    readonly settlerType: SettlementEngineType.XrpPaychan
+    readonly secret: string
+    readonly address: string
   },
   'ValidatedXrpSecret'
 >
@@ -105,8 +110,10 @@ const setupCredential = (cred: UnvalidatedXrpSecret) => async (
 
 const uniqueId = (cred: ValidatedXrpSecret): string => cred.address
 
-// TODO Can I eliminate this?
-const closeCredential = () => Promise.resolve()
+export const configFromXrpCredential = ({
+  address,
+  ...cred
+}: ValidatedXrpSecret): UnvalidatedXrpSecret => cred
 
 /**
  * ------------------------------------
@@ -114,17 +121,12 @@ const closeCredential = () => Promise.resolve()
  * ------------------------------------
  */
 
-export interface XrpPaychanUplinkConfig extends BaseUplinkConfig {
-  settlerType: SettlementEngineType.XrpPaychan
-  credentialId: string
-}
-
 export interface XrpPaychanBaseUplink extends BaseUplink {
-  settlerType: SettlementEngineType.XrpPaychan
-  credentialId: string
-  plugin: XrpAsymClient
-  incomingChannelAmount$: BehaviorSubject<BigNumber>
-  outgoingChannelAmount$: BehaviorSubject<BigNumber>
+  readonly settlerType: SettlementEngineType.XrpPaychan
+  readonly credentialId: string
+  readonly plugin: XrpAsymClient
+  readonly incomingChannelAmount$: BehaviorSubject<BigNumber>
+  readonly outgoingChannelAmount$: BehaviorSubject<BigNumber>
 }
 
 export type ReadyXrpPaychanUplink = XrpPaychanBaseUplink & ReadyUplink
@@ -157,8 +159,8 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
 
   /** Stream of updated properties on the underlying plugin */
   const plugin$ = new Subject<{
-    key: any
-    val: any
+    readonly key: any
+    readonly val: any
   }>()
 
   /** Trap all property updates on the plugin to emit them on observable */
@@ -302,8 +304,8 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   amount,
   authorize
 }: {
-  amount: BigNumber
-  authorize: AuthorizeDeposit
+  readonly amount: BigNumber
+  readonly authorize: AuthorizeDeposit
 }) => {
   const { api } = state.settlers[uplink.settlerType]
   const { address } = getCredential(state)(uplink.credentialId)
@@ -355,6 +357,7 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
 
   // TODO Since the channel is now open, perform the rest of the connect handshake
 
+  // TODO Basically, perform this handshake whenever there's no incoming capacity
   if (requiresNewChannel) {
     await uplink.plugin._performConnectHandshake()
 
@@ -378,6 +381,16 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
     return
   }
   const { address, secret } = readyCredential
+
+  /**
+   * TODO This also throws an error if there's no incoming claim --
+   * I should perform checks and submit a single tx in that case
+   *
+   * (TODO add close=true option to asym-client? a lot of the checks are already there)
+   * (also, a LOT of race conditions in asym-client in general... yikes!)
+   *
+   * (At some point, it'd just be easier to port it over from eth!)
+   */
 
   // Submit a claim to the ledger, if it's profitable
   // TODO Combine this and channel close into a single tx?
@@ -434,34 +447,10 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
  * ------------------------------------
  */
 
-export interface XrpPaychanSettlementModule
-  extends SettlementModule<
-    SettlementEngineType.XrpPaychan,
-    XrpPaychanSettlementEngine,
-    UnvalidatedXrpSecret,
-    ValidatedXrpSecret,
-    XrpPaychanBaseUplink,
-    ReadyXrpPaychanUplink
-  > {
-  readonly deposit: (
-    uplink: ReadyXrpPaychanUplink
-  ) => (
-    state: State
-  ) => (opts: {
-    amount: BigNumber
-    authorize: AuthorizeDeposit
-  }) => Promise<void>
-
-  readonly withdraw: (
-    uplink: ReadyXrpPaychanUplink
-  ) => (state: State) => (authorize: AuthorizeWithdrawal) => Promise<void>
-}
-
-export const XrpPaychan: XrpPaychanSettlementModule = {
+export const XrpPaychan = {
   setupEngine,
   setupCredential,
   uniqueId,
-  closeCredential,
   connectUplink,
   deposit,
   withdraw

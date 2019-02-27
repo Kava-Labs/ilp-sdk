@@ -21,7 +21,7 @@ import { HttpProvider } from 'web3/providers'
 import createLogger from '../utils/log'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import { fetchGasPrice } from './shared/eth'
-import { LedgerEnv, State, SettlementModule } from '..'
+import { LedgerEnv, State } from '..'
 import { BehaviorSubject, fromEvent } from 'rxjs'
 import { map, timeout, first } from 'rxjs/operators'
 
@@ -32,7 +32,8 @@ import { map, timeout, first } from 'rxjs/operators'
  */
 
 export interface MachinomySettlementEngine extends SettlementEngine {
-  ethereumProvider: HttpProvider
+  readonly settlerType: SettlementEngineType.Machinomy
+  readonly ethereumProvider: HttpProvider
 }
 
 export const setupEngine = async (
@@ -43,13 +44,8 @@ export const setupEngine = async (
     `https://${network}.infura.io/v3/92e263da65ac4703bf99df7828c6beca`
   )
 
-  // TODO Does the Web3 provider even perform any block polling/are multiple instances bad?
-
-  // TODO Download and run a Parity light client here?
-
   return {
     settlerType: SettlementEngineType.Machinomy,
-
     assetCode: 'ETH',
     assetScale: 9,
     baseUnit: gwei,
@@ -75,36 +71,44 @@ export const setupEngine = async (
  */
 
 export interface ValidatedEthereumPrivateKey {
-  settlerType: SettlementEngineType.Machinomy
-  privateKey: string
+  readonly settlerType: SettlementEngineType.Machinomy
+  readonly privateKey: string
 }
 
 export type ReadyEthereumCredential = {
-  settlerType: SettlementEngineType.Machinomy
-  privateKey: string
-  address: string
+  readonly settlerType: SettlementEngineType.Machinomy
+  readonly privateKey: string
+  readonly address: string
 }
 
+/**
+ * Ensure that the given string is begins with given prefix
+ * - Prefix the string if it doesn't already
+ */
+const prefixWith = (prefix: string, str: string) =>
+  str.startsWith(prefix) ? str : prefix + str
+
+const addressFromPrivate = (privateKey: string) =>
+  privateToAddress(toBuffer(privateKey)).toString('hex')
+
+// TODO If the private key is invalid, this should return a specific error rather than throwing
 export const setupCredential = ({
   privateKey,
   settlerType
 }: ValidatedEthereumPrivateKey) => async (): Promise<
   ReadyEthereumCredential
-> => {
-  if (!privateKey.startsWith('0x')) {
-    privateKey = '0x' + privateKey
-  }
-
-  return {
-    settlerType,
-    privateKey,
-    address: '0x' + privateToAddress(toBuffer(privateKey)).toString('hex')
-  }
-}
+> => ({
+  settlerType,
+  privateKey: prefixWith('0x', privateKey),
+  address: prefixWith('0x', addressFromPrivate(prefixWith('0x', privateKey)))
+})
 
 export const uniqueId = (cred: ReadyEthereumCredential) => cred.address
 
-export const closeCredential = () => Promise.resolve()
+export const configFromEthereumCredential = ({
+  address,
+  ...config
+}: ReadyEthereumCredential): ValidatedEthereumPrivateKey => config
 
 /**
  * ------------------------------------
@@ -113,14 +117,14 @@ export const closeCredential = () => Promise.resolve()
  */
 
 export interface MachinomyUplinkConfig extends BaseUplinkConfig {
-  settlerType: SettlementEngineType.Machinomy
-  credential: ValidatedEthereumPrivateKey
+  readonly settlerType: SettlementEngineType.Machinomy
+  readonly credential: ValidatedEthereumPrivateKey
 }
 
 export interface MachinomyBaseUplink extends BaseUplink {
-  plugin: EthereumPlugin
-  settlerType: SettlementEngineType.Machinomy
-  pluginAccount: EthereumAccount
+  readonly plugin: EthereumPlugin
+  readonly settlerType: SettlementEngineType.Machinomy
+  readonly pluginAccount: EthereumAccount
 }
 
 export type ReadyMachinomyUplink = MachinomyBaseUplink & ReadyUplink
@@ -222,8 +226,8 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
   amount,
   authorize
 }: {
-  amount: BigNumber
-  authorize: AuthorizeDeposit
+  readonly amount: BigNumber
+  readonly authorize: AuthorizeDeposit
 }) => {
   const fundAmountWei = convert(eth(amount), wei())
   await uplink.pluginAccount.fundOutgoingChannel(fundAmountWei, async fee => {
@@ -259,6 +263,7 @@ const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
     }
   )
 
+  // TODO This won't reject if the withdraw fails!
   const requestClose = uplink.pluginAccount.requestClose()
 
   // Simultaneously withdraw and request incoming capacity to be removed
@@ -273,33 +278,10 @@ const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
  * ------------------------------------
  */
 
-export interface MachinomySettlementModule
-  extends SettlementModule<
-    SettlementEngineType.Machinomy,
-    MachinomySettlementEngine,
-    ValidatedEthereumPrivateKey,
-    ReadyEthereumCredential,
-    MachinomyBaseUplink,
-    ReadyMachinomyUplink
-  > {
-  readonly deposit: (
-    uplink: ReadyMachinomyUplink
-  ) => (
-    state: State
-  ) => (opts: {
-    amount: BigNumber
-    authorize: AuthorizeDeposit
-  }) => Promise<void>
-  readonly withdraw: (
-    uplink: ReadyMachinomyUplink
-  ) => (state: State) => (authorize: AuthorizeDeposit) => Promise<void>
-}
-
-export const Machinomy: MachinomySettlementModule = {
+export const Machinomy = {
   setupEngine,
   setupCredential,
   uniqueId,
-  closeCredential,
   connectUplink,
   deposit,
   withdraw

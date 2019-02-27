@@ -17,7 +17,7 @@ import LightningPlugin, {
 import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
 import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
-import { LedgerEnv, SettlementModule, State } from '..'
+import { LedgerEnv, State } from '..'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import { Flavor } from '../types/util'
 import {
@@ -35,12 +35,14 @@ import { MemoryStore } from '../utils/store'
  * ------------------------------------
  */
 
-export type LndSettlementEngine = Flavor<SettlementEngine, 'Lnd'>
+export interface LndSettlementEngine extends SettlementEngine {
+  readonly settlerType: SettlementEngineType.Lnd
+}
+
 const setupEngine = async (
   ledgerEnv: LedgerEnv
 ): Promise<LndSettlementEngine> => ({
-  settlerType: SettlementEngineType.Lnd, // TODO
-
+  settlerType: SettlementEngineType.Lnd,
   assetCode: 'BTC',
   assetScale: 8,
   baseUnit: satoshi,
@@ -73,40 +75,42 @@ const splitHost = (host: string): Option<ValidHost> =>
   }))
 
 export type ValidHost = {
-  hostname: string
-  port: number
+  readonly hostname: string
+  readonly port: number
 }
 
 // TODO Add method to validate credentials using `setupCredential` then `closeCredential`
 
 export interface ValidatedLndCredential {
-  settlerType: SettlementEngineType.Lnd // TODO!
-
-  /** Hostname that exposes peering and gRPC server (on different ports) */
-  hostname: string
+  /** TODO */
+  readonly settlerType: SettlementEngineType.Lnd
+  /** LND node hostname that exposes peering and gRPC server on different ports */
+  readonly hostname: string
   /** Port for gRPC connections */
-  grpcPort?: number
+  readonly grpcPort?: number
   /** TLS cert as a Base64-encoded string */
-  tlsCert: string
+  readonly tlsCert: string
   /** LND macaroon as Base64-encoded string */
-  macaroon: string
+  readonly macaroon: string
 }
 
 export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
 
 export interface ReadyLndCredential {
-  settlerType: SettlementEngineType.Lnd
-
+  /** TODO */
+  readonly settlerType: SettlementEngineType.Lnd
   /** gRPC client connected to Lighnting node for performing requests */
-  service: LndService
+  readonly service: LndService
   /** Bidirectional streaming RPC to send outgoing payments and receive attestations */
-  paymentStream: PaymentStream
+  readonly paymentStream: PaymentStream
   /** Streaming RPC of newly added or settled invoices */
-  invoiceStream: InvoiceStream
+  readonly invoiceStream: InvoiceStream
   /** Lightning secp256k1 public key */
-  identityPublicKey: LndIdentityPublicKey
+  readonly identityPublicKey: LndIdentityPublicKey
   /** Streaming updates of balance in channel */
-  channelBalance$: BehaviorSubject<BigNumber>
+  readonly channelBalance$: BehaviorSubject<BigNumber>
+  /** TODO */
+  readonly config: ValidatedLndCredential
 }
 
 const fetchChannelBalance = async (lightning: LndService) => {
@@ -153,13 +157,18 @@ const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
     paymentStream,
     invoiceStream,
     identityPublicKey,
-    channelBalance$
+    channelBalance$,
+    config: opts
   }
 }
 
 // TODO Also unsubscribe/end all of the event listeners (confirm there aren't any memory leaks)
 export const closeCredential = async ({ service }: ReadyLndCredential) =>
   service.close()
+
+export const configFromLndCredential = (
+  cred: ReadyLndCredential
+): ValidatedLndCredential => cred.config
 
 /*
  * ------------------------------------
@@ -168,13 +177,13 @@ export const closeCredential = async ({ service }: ReadyLndCredential) =>
  */
 
 export interface LndUplinkConfig extends BaseUplinkConfig {
-  settlerType: SettlementEngineType.Lnd
-  credentialId: LndIdentityPublicKey
+  readonly settlerType: SettlementEngineType.Lnd
+  readonly credentialId: LndIdentityPublicKey
 }
 
 export interface LndBaseUplink extends BaseUplink {
-  settlerType: SettlementEngineType.Lnd
-  credentialId: LndIdentityPublicKey
+  readonly settlerType: SettlementEngineType.Lnd
+  readonly credentialId: LndIdentityPublicKey
 }
 
 export type ReadyLndUplink = LndBaseUplink & ReadyUplink // TODO 'ReadyUplink' doesn't exist!
@@ -240,18 +249,7 @@ const connectUplink = (credential: ReadyLndCredential) => (
  * ------------------------------------
  */
 
-export type LndSettlementModule = SettlementModule<
-  SettlementEngineType.Lnd,
-  LndSettlementEngine,
-  ValidatedLndCredential,
-  ReadyLndCredential,
-  // LndUplinkConfig,
-  LndBaseUplink,
-  ReadyLndUplink
->
-
-export const Lnd: LndSettlementModule = {
-  // settlerType: SettlementEngineType.Lnd,
+export const Lnd = {
   setupEngine,
   setupCredential,
   uniqueId,
