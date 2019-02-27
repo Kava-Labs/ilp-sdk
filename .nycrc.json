@@ -1,7 +1,5 @@
 {
-  "include": ["src/**/*.ts"],
-  "exclude": ["**/__tests__/**/*.ts", "**/*.d.ts"],
-  "extension": [".ts"],
-  "require": ["ts-node/register"],
-  "reporter": ["text", "html", "lcov"]
+  "include": ["build/**/*.js"],
+  "exclude": ["**/__tests__/**/*.js", "**/*.ts"],
+  "extension": [".js"]
 }
