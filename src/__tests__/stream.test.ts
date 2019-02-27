@@ -10,6 +10,9 @@ import {
 } from '..'
 import BigNumber from 'bignumber.js'
 import { performance } from 'perf_hooks'
+import { promisify } from 'util'
+import { unlink } from 'fs'
+import { CONFIG_PATH } from '../config'
 
 const test = anyTest as TestInterface<SwitchApi>
 
@@ -37,6 +40,8 @@ export const addXrp = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
 // Before & after each test, construct and disconnect the API
 
 test.beforeEach(async t => {
+  // Delete any existing config
+  await promisify(unlink)(CONFIG_PATH)
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
@@ -106,6 +111,8 @@ const testFunding = (
     }),
     'uplink can stream money to itself'
   )
+
+  // TODO In the case of eth, this won't actually get the final claim before it withdraws
 
   await t.notThrowsAsync(
     withdraw({ uplink, authorize: () => Promise.resolve() }),
@@ -196,3 +203,16 @@ test('btc -> eth', testExchange(addBtc, addEth))
 test('btc -> xrp', testExchange(addBtc, addXrp))
 test('eth -> btc', testExchange(addEth, addBtc))
 test('eth -> xrp', testExchange(addEth, addXrp))
+
+// test.only('persistence', async t => {
+//   const api = t.context
+//   const { disconnect } = api
+
+//   await Promise.all([addBtc(api), addEth(api)])
+//   await disconnect()
+
+//   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
+//   const newApi = t.context
+
+//   t.true(newApi.state.uplinks.length === 2)
+// })

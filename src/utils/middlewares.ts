@@ -15,20 +15,25 @@ import { BehaviorSubject } from 'rxjs'
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
 export interface PluginWrapperOpts {
-  plugin: Plugin
-  maxBalance?: BigNumber.Value
-  maxPacketAmount?: BigNumber.Value
-  log: Logger
-  assetCode: string
-  assetScale: number
-  store?: MemoryStore
+  readonly plugin: Plugin
+  readonly maxBalance?: BigNumber.Value
+  readonly maxPacketAmount?: BigNumber.Value
+  readonly log: Logger
+  readonly assetCode: string
+  readonly assetScale: number
+  readonly store: MemoryStore
 }
 
-export class PluginWrapper implements Plugin {
+// TODO Since this isn't really used as a class anymore, could I just use these as standalone functions
+//      existing around a plugin?
+//      (How do I ensure that stream only calls these functions, though?)
+
+export class PluginWrapper {
   static readonly version = 2
 
   // Internal plugin
   private readonly plugin: Plugin
+  /* tslint:disable-next-line:readonly-keyword TODO */
   private dataHandler: DataHandler = defaultDataHandler
 
   /**
@@ -89,7 +94,7 @@ export class PluginWrapper implements Plugin {
     this.plugin.registerDataHandler(data => this.handleData(data))
     this.plugin.registerMoneyHandler(amount => this.handleMoney(amount))
 
-    this.store = store || new MemoryStore()
+    this.store = store
     this.log = log
     this.assetCode = assetCode
     this.assetScale = assetScale
@@ -144,7 +149,7 @@ export class PluginWrapper implements Plugin {
     return response
   }
 
-  async sendMoney(amount: string) {
+  async sendMoney(amount: string): Promise<void> {
     if (parseInt(amount, 10) <= 0) {
       return
     }
@@ -161,7 +166,7 @@ export class PluginWrapper implements Plugin {
    * Incoming packets/settlements (receivable balance)
    */
 
-  private async handleMoney(amount: string) {
+  private async handleMoney(amount: string): Promise<void> {
     if (new BigNumber(amount).isZero()) {
       return
     }
@@ -238,39 +243,15 @@ export class PluginWrapper implements Plugin {
    * Plugin wrapper
    */
 
-  async connect(opts?: object) {
-    return this.plugin.connect(opts)
-  }
-
-  disconnect() {
-    return this.plugin.disconnect()
-  }
-
-  isConnected() {
-    return this.plugin.isConnected()
-  }
-
-  registerDataHandler(handler: DataHandler) {
-    if (this.dataHandler !== defaultDataHandler) {
-      throw new Error('request handler is already registered')
-    }
-
+  registerDataHandler(handler: DataHandler): void {
     this.dataHandler = handler
   }
 
-  deregisterDataHandler() {
+  deregisterDataHandler(): void {
     this.dataHandler = defaultDataHandler
   }
 
-  registerMoneyHandler() {
-    return
-  }
-
-  deregisterMoneyHandler() {
-    return
-  }
-
-  private format(amount: BigNumber.Value) {
+  private format(amount: BigNumber.Value): string {
     return `${new BigNumber(amount).shiftedBy(
       -this.assetScale
     )} ${this.assetCode.toLowerCase()}`
