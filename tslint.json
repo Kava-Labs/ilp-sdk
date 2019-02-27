@@ -2,6 +2,29 @@
   "extends": [
     "tslint-config-standard",
     "tslint-eslint-rules",
+    "tslint-immutable",
     "tslint-config-prettier"
-  ]
+  ],
+  "rules": {
+    // Recommended built-in rules
+    "no-var-keyword": true,
+    "no-parameter-reassignment": true,
+    "typedef": [true, "call-signature"],
+
+    // Immutability rules
+    "readonly-keyword": true,
+    // "readonly-array": true,
+    "no-let": true
+    // "no-array-mutation": true,
+    // "no-object-mutation": true,
+    // "no-delete": true,
+    // "no-method-signature": true,
+
+    // Functional style rules
+    // "no-this": true,
+    // "no-class": true,
+    // "no-mixed-interface": true,
+    // "no-expression-statement": true,
+    // "no-if-statement": true
+  }
 }
