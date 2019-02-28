@@ -3,5 +3,6 @@ export default {
   failFast: true,
   verbose: true,
   serial: true,
-  timeout: '3m'
+  timeout: '3m',
+  require: ['source-map-support/register']
 }
