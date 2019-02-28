@@ -41,7 +41,7 @@ export const addXrp = ({ add }: SwitchApi): Promise<ReadyUplinks> =>
 
 test.beforeEach(async t => {
   // Delete any existing config
-  await promisify(unlink)(CONFIG_PATH)
+  await promisify(unlink)(CONFIG_PATH).catch(() => Promise.resolve())
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
