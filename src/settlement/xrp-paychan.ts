@@ -1,4 +1,4 @@
-import { convert, drop, xrp, xrpBase } from '@kava-labs/crypto-rate-utils'
+import { convert, drop, xrp, xrpBase, usd } from '@kava-labs/crypto-rate-utils'
 import XrpAsymClient, {
   PaymentChannelClaim
 } from '@kava-labs/ilp-plugin-xrp-asym-client'
@@ -310,7 +310,11 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   const { api } = state.settlers[uplink.settlerType]
   const { address } = getCredential(state)(uplink.credentialId)
 
-  // TODO Check that the total amount deposited > 2 XRP (per connector-config)!
+  // TODO Temporarily solve issue with deadlock due to insufficient outgoing
+  // (server won't fund incoming, even if more is deposited later)
+  if (convert(xrp(amount), usd(), state.rateBackend).isLessThan(0.6)) {
+    throw new Error('insufficient deposit amount')
+  }
 
   // Confirm that the account has sufficient funds to cover the reserve
   const { ownerCount, xrpBalance } = await api.getAccountInfo(address) // TODO May throw if the account isn't found
@@ -351,20 +355,18 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
     ? await uplink.plugin._createOutgoingChannel(amount.toString())
     : await uplink.plugin._fundOutgoingChannel(amount.toString())
 
+  // TODO Change this to perform the handshake whenever there's no incoming capacity
+  if (requiresNewChannel) {
+    await uplink.plugin._performConnectHandshake()
+  }
+
   uplink.outgoingChannelAmount$.next(
     await refreshOutgoingChannel(state)(uplink.plugin)
   )
 
-  // TODO Since the channel is now open, perform the rest of the connect handshake
-
-  // TODO Basically, perform this handshake whenever there's no incoming capacity
-  if (requiresNewChannel) {
-    await uplink.plugin._performConnectHandshake()
-
-    uplink.incomingChannelAmount$.next(
-      await refreshIncomingChannel(state)(uplink.plugin)
-    )
-  }
+  uplink.incomingChannelAmount$.next(
+    await refreshIncomingChannel(state)(uplink.plugin)
+  )
 }
 
 const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
