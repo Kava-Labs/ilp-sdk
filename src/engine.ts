@@ -5,8 +5,8 @@ import {
   XrpPaychanSettlementEngine,
   XrpPaychan
 } from './settlement/xrp-paychan'
+import { MachinomySettlementEngine, Machinomy } from './settlement/machinomy'
 import { State, LedgerEnv } from '.'
-import { Machinomy } from './settlement/machinomy'
 
 export enum SettlementEngineType {
   /** Lightning daeman */
@@ -33,7 +33,10 @@ export interface SettlementEngine {
   }
 }
 
-export type SettlementEngines = LndSettlementEngine | XrpPaychanSettlementEngine
+export type SettlementEngines =
+  | LndSettlementEngine
+  | XrpPaychanSettlementEngine
+  | MachinomySettlementEngine
 
 // TODO Add "closeEngine" to specific settlement modules
 export const closeEngine = (settler: SettlementEngines) => {

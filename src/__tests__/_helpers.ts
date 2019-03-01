@@ -4,7 +4,17 @@ import { ExecutionContext } from 'ava'
 import BigNumber from 'bignumber.js'
 import { performance } from 'perf_hooks'
 import { SwitchApi, SettlementEngineType, ReadyUplinks } from '..'
-import { CredentialConfigs } from '../credential'
+import { SettlementEngines } from '../engine'
+import {
+  CredentialConfigs,
+  ReadyCredentials,
+  getCredential
+} from '../credential'
+import {
+  baseLayerBalance as getMachinomyBaseBalance,
+  MachinomySettlementEngine,
+  ReadyEthereumCredential
+} from '../settlement/machinomy'
 
 // Return configs for connecting to accounts set up in env vars.
 const ethConfig = (n: number): CredentialConfigs => {
@@ -39,6 +49,27 @@ export const addXrp = (n: number) => ({
   add
 }: SwitchApi): Promise<ReadyUplinks> => add(xrpConfig(n))
 
+async function getBaseLayerBalance(
+  settler: SettlementEngines,
+  credential: ReadyCredentials
+): Promise<BigNumber> {
+  // TODO add Machinonmy to SettlementEngine type?
+  // call the right function
+  switch (
+    settler.settlerType // should switch based on type check of settler? and func arg should have an interface type that the settler's fulfil
+  ) {
+    case SettlementEngineType.Lnd:
+      return Promise.resolve(new BigNumber(0)) // TODO credential.channelBalance$ // TODO write a wrapper baseLayerBalance?
+    case SettlementEngineType.Machinomy:
+      return getMachinomyBaseBalance(
+        settler as MachinomySettlementEngine,
+        credential as ReadyEthereumCredential
+      ) // TODO add baseLayer to settlement module interface?
+    case SettlementEngineType.XrpPaychan:
+      return Promise.resolve(new BigNumber(0)) // TODO write this: XrpPaychan.baseLayerBalance(credential, settler)
+  }
+}
+
 // Helper to test deposit and withdraw on uplinks
 export const testFunding = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
@@ -57,7 +88,6 @@ export const testFunding = (
 
   t.true(uplink.balance$.value.isZero(), 'initial layer 2 balance is 0')
 
-  // TODO Check base layer balances to make sure fees are also correctly reported!
   // TODO Check that incoming capacity is opened!
 
   /**
@@ -65,12 +95,23 @@ export const testFunding = (
    * e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
    */
 
+  const baseBalance0 = await getBaseLayerBalance(
+    settler,
+    getCredential(state)(uplink.credentialId)!
+  )
+  const reportedValueAndFee1 = {
+    value: new BigNumber(0),
+    fee: new BigNumber(0)
+  } // TODO Can this start un-initialized?
   const openAmount = toUplinkUnit(usd(1))
   await t.notThrowsAsync(
     deposit({
       uplink,
       amount: openAmount,
-      authorize: () => Promise.resolve()
+      authorize: async ({ value, fee }) => {
+        reportedValueAndFee1.value = value
+        reportedValueAndFee1.fee = fee
+      }
     }),
     'opens channel without throwing an error'
   )
@@ -79,13 +120,33 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
+  // assert base layer balance decreased by open amount and fee
+  const baseBalance1 = await getBaseLayerBalance(
+    settler,
+    getCredential(state)(uplink.credentialId)!
+  )
+  t.true(
+    baseBalance0
+      .minus(openAmount)
+      .minus(reportedValueAndFee1.fee)
+      .isEqualTo(baseBalance1)
+  )
+  // assert value reported accurately
+  t.true(openAmount.isEqualTo(reportedValueAndFee1.value)) // TODO isEqualTo vs deepEqual?
 
+  const reportedValueAndFee2 = {
+    value: new BigNumber(0),
+    fee: new BigNumber(0)
+  } // TODO Can this start un-initialized?
   const depositAmount = toUplinkUnit(usd(2))
   await t.notThrowsAsync(
     deposit({
       uplink,
       amount: depositAmount,
-      authorize: () => Promise.resolve()
+      authorize: async ({ value, fee }) => {
+        reportedValueAndFee2.value = value
+        reportedValueAndFee2.fee = fee
+      }
     }),
     'deposits to channel without throwing an error'
   )
@@ -94,6 +155,19 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
+  // assert base layer balance decreased by deposit amount and fee
+  const baseBalance2 = await getBaseLayerBalance(
+    settler,
+    getCredential(state)(uplink.credentialId)!
+  )
+  t.true(
+    baseBalance1
+      .minus(depositAmount)
+      .minus(reportedValueAndFee2.fee)
+      .isEqualTo(baseBalance2)
+  )
+  // assert value reported accurately
+  t.true(depositAmount.isEqualTo(reportedValueAndFee2.value))
 
   // Rebalance so there's some money in both the incoming & outgoing channels
   await t.notThrowsAsync(
@@ -105,8 +179,19 @@ export const testFunding = (
     'uplink can stream money to itself'
   )
 
+  const reportedValueAndFee3 = {
+    value: new BigNumber(0),
+    fee: new BigNumber(0)
+  } // TODO Can this start un-initialized?
+  const finalBalance = uplink.balance$.value
   await t.notThrowsAsync(
-    withdraw({ uplink, authorize: () => Promise.resolve() }),
+    withdraw({
+      uplink,
+      authorize: async ({ value, fee }) => {
+        reportedValueAndFee3.value = value
+        reportedValueAndFee3.fee = fee
+      }
+    }),
     'withdraws from channel without throwing an error'
   )
 
@@ -114,6 +199,19 @@ export const testFunding = (
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
+  // assert base layer balance increased by uplink
+  const baseBalance3 = await getBaseLayerBalance(
+    settler,
+    getCredential(state)(uplink.credentialId)!
+  )
+  t.true(
+    baseBalance2
+      .plus(finalBalance)
+      .minus(reportedValueAndFee3.fee.dividedBy(2))
+      .isEqualTo(baseBalance3)
+  ) // TODO why is reported fee half?
+  // assert value reported accurately
+  t.true(finalBalance.isEqualTo(reportedValueAndFee3.value))
 }
 
 // Helper to test streaming between different uplinks
