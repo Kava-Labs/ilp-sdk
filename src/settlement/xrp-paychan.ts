@@ -382,19 +382,14 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   }
   const { address, secret } = readyCredential
 
-  /**
-   * TODO This also throws an error if there's no incoming claim --
-   * I should perform checks and submit a single tx in that case
-   *
-   * (TODO add close=true option to asym-client? a lot of the checks are already there)
-   * (also, a LOT of race conditions in asym-client in general... yikes!)
-   *
-   * (At some point, it'd just be easier to port it over from eth!)
-   */
+  // Prompt the user to authorize the withdrawal
+  // TODO Add actual fee calculation to the XRP plugins
+  const fee = convert(drop(10), xrp())
+  const value = uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value)
+  await authorize({ fee, value })
 
-  // Submit a claim to the ledger, if it's profitable
-  // TODO Combine this and channel close into a single tx?
-  await uplink.plugin._autoClaim()
+  // Submit latest claim and close the incoming channel
+  await uplink.plugin._autoClaim(true)
 
   /*
    * Per https://github.com/interledgerjs/ilp-plugin-xrp-paychan-shared/pull/23,
@@ -402,37 +397,17 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
    */
   const submitter = createSubmitter(api, address, secret)
 
-  // TODO xrp-asym-server uses api and not tx-submitter. Why don't I? (Could resolve issue)
-  const closeChannel = (channelId: string) =>
-    submitter
+  const outgoingChannelId = uplink.plugin._channel
+  if (outgoingChannelId) {
+    await submitter
       .submit('preparePaymentChannelClaim', {
-        channel: channelId,
+        channel: outgoingChannelId,
         close: true
       })
       .catch((err: Error) => log.error('Failed to close channel: ', err))
-
-  // Prompt the user to authorize the withdrawal
-  const fee = convert(drop(10), xrp())
-  const value = uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value)
-  await authorize({ fee, value })
-
-  const outgoingChannelId = uplink.plugin._channel
-  if (outgoingChannelId) {
-    await closeChannel(outgoingChannelId)
-  }
-
-  // xrp-paychan-shared occasionally throws an error when it tries to remove a pending
-  // transaction from its queue after it got confirmed (something with maxLedgerVersion?)
-  // TODO This *possibly* fixes that bug
-  await new Promise(r => setTimeout(r, 2000))
-
-  const incomingChannelId = uplink.plugin._clientChannel
-  if (incomingChannelId) {
-    await closeChannel(incomingChannelId)
   }
 
   // Ensure that the balances are updated to reflect the closed channels
-
   uplink.incomingChannelAmount$.next(
     await refreshIncomingChannel(state)(uplink.plugin)
   )

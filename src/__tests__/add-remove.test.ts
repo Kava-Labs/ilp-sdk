@@ -22,8 +22,7 @@ test.beforeEach(async t => {
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
-// TODO REMOVE THE CATCH !
-test.afterEach(async t => t.context.disconnect().catch(() => Promise.resolve()))
+test.afterEach(async t => t.context.disconnect())
 
 // Test adding and removing uplinks
 const testAddRemove = (
@@ -38,9 +37,7 @@ const testAddRemove = (
 
 test('btc: add then remove', testAddRemove(addBtc()))
 test('eth: add then remove', testAddRemove(addEth()))
-
-// TODO Uncomment this!
-test.failing('xrp: add then remove', testAddRemove(addXrp()))
+test('xrp: add then remove', testAddRemove(addXrp()))
 
 // Test that uplinks with the same credentials cannot be added
 
