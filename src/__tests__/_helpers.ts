@@ -49,12 +49,10 @@ export const addXrp = (n: number) => ({
   add
 }: SwitchApi): Promise<ReadyUplinks> => add(xrpConfig(n))
 
-async function getBaseLayerBalance(
+const getBaseLayerBalance = async (
   settler: SettlementEngines,
   credential: ReadyCredentials
-): Promise<BigNumber> {
-  // TODO add Machinonmy to SettlementEngine type?
-  // call the right function
+): Promise<BigNumber> => {
   switch (
     settler.settlerType // should switch based on type check of settler? and func arg should have an interface type that the settler's fulfil
   ) {
@@ -70,6 +68,20 @@ async function getBaseLayerBalance(
   }
 }
 
+// An authorize function for use in deposit and withdraw. It authorizes and records the reported value and fee (in the provided object).
+const createAuthorizeAndCaptureFunc = (captureObject: any) => async (
+  params: any
+) => {
+  captureObject.value = params.value
+  captureObject.fee = params.fee
+}
+const createEmptyCaptureObject = () => {
+  return {
+    value: new BigNumber(0),
+    fee: new BigNumber(0)
+  }
+}
+
 // Helper to test deposit and withdraw on uplinks
 export const testFunding = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
@@ -78,6 +90,8 @@ export const testFunding = (
   const uplink = await createUplink(t.context)
 
   const settler = state.settlers[uplink.settlerType]
+  const currentBaseBalance = async () =>
+    getBaseLayerBalance(settler, getCredential(state)(uplink.credentialId)!)
 
   // Instead down to the base unit of the ledger if there's more precision than that
   const toUplinkUnit = (unit: AssetUnit) =>
@@ -89,29 +103,22 @@ export const testFunding = (
   t.true(uplink.balance$.value.isZero(), 'initial layer 2 balance is 0')
 
   // TODO Check that incoming capacity is opened!
+  // TODO Use t.deepEqual instead  of isEqualTo?
 
   /**
    * TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
    * e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
    */
 
-  const baseBalance0 = await getBaseLayerBalance(
-    settler,
-    getCredential(state)(uplink.credentialId)!
-  )
-  const reportedValueAndFee1 = {
-    value: new BigNumber(0),
-    fee: new BigNumber(0)
-  } // TODO Can this start un-initialized?
+  // Deposit to uplink (opens channel).
+  const baseBalance0 = await currentBaseBalance()
+  const reportedValueAndFee1 = createEmptyCaptureObject()
   const openAmount = toUplinkUnit(usd(1))
   await t.notThrowsAsync(
     deposit({
       uplink,
       amount: openAmount,
-      authorize: async ({ value, fee }) => {
-        reportedValueAndFee1.value = value
-        reportedValueAndFee1.fee = fee
-      }
+      authorize: createAuthorizeAndCaptureFunc(reportedValueAndFee1)
     }),
     'opens channel without throwing an error'
   )
@@ -120,33 +127,27 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
-  // assert base layer balance decreased by open amount and fee
-  const baseBalance1 = await getBaseLayerBalance(
-    settler,
-    getCredential(state)(uplink.credentialId)!
-  )
+  const baseBalance1 = await currentBaseBalance()
   t.true(
     baseBalance0
       .minus(openAmount)
       .minus(reportedValueAndFee1.fee)
-      .isEqualTo(baseBalance1)
+      .isEqualTo(baseBalance1),
+    'base layer balance matches reported balances'
   )
-  // assert value reported accurately
-  t.true(openAmount.isEqualTo(reportedValueAndFee1.value)) // TODO isEqualTo vs deepEqual?
+  t.true(
+    openAmount.isEqualTo(reportedValueAndFee1.value),
+    'authorize reports correct value'
+  )
 
-  const reportedValueAndFee2 = {
-    value: new BigNumber(0),
-    fee: new BigNumber(0)
-  } // TODO Can this start un-initialized?
+  // Deposit to uplink (tops up channel).
+  const reportedValueAndFee2 = createEmptyCaptureObject()
   const depositAmount = toUplinkUnit(usd(2))
   await t.notThrowsAsync(
     deposit({
       uplink,
       amount: depositAmount,
-      authorize: async ({ value, fee }) => {
-        reportedValueAndFee2.value = value
-        reportedValueAndFee2.fee = fee
-      }
+      authorize: createAuthorizeAndCaptureFunc(reportedValueAndFee2)
     }),
     'deposits to channel without throwing an error'
   )
@@ -155,21 +156,20 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
-  // assert base layer balance decreased by deposit amount and fee
-  const baseBalance2 = await getBaseLayerBalance(
-    settler,
-    getCredential(state)(uplink.credentialId)!
-  )
+  const baseBalance2 = await currentBaseBalance()
   t.true(
     baseBalance1
       .minus(depositAmount)
       .minus(reportedValueAndFee2.fee)
-      .isEqualTo(baseBalance2)
+      .isEqualTo(baseBalance2),
+    'base layer balance matches reported balances'
   )
-  // assert value reported accurately
-  t.true(depositAmount.isEqualTo(reportedValueAndFee2.value))
+  t.true(
+    depositAmount.isEqualTo(reportedValueAndFee2.value),
+    'authorize reports correct value'
+  )
 
-  // Rebalance so there's some money in both the incoming & outgoing channels
+  // Rebalance so there's some money in both the incoming & outgoing channels.
   await t.notThrowsAsync(
     streamMoney({
       amount: toUplinkUnit(usd(1.1)),
@@ -179,18 +179,13 @@ export const testFunding = (
     'uplink can stream money to itself'
   )
 
-  const reportedValueAndFee3 = {
-    value: new BigNumber(0),
-    fee: new BigNumber(0)
-  } // TODO Can this start un-initialized?
+  // Withdraw from uplink (closes channel).
+  const reportedValueAndFee3 = createEmptyCaptureObject()
   const finalBalance = uplink.balance$.value
   await t.notThrowsAsync(
     withdraw({
       uplink,
-      authorize: async ({ value, fee }) => {
-        reportedValueAndFee3.value = value
-        reportedValueAndFee3.fee = fee
-      }
+      authorize: createAuthorizeAndCaptureFunc(reportedValueAndFee3)
     }),
     'withdraws from channel without throwing an error'
   )
@@ -199,19 +194,18 @@ export const testFunding = (
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
-  // assert base layer balance increased by uplink
-  const baseBalance3 = await getBaseLayerBalance(
-    settler,
-    getCredential(state)(uplink.credentialId)!
-  )
+  const baseBalance3 = await currentBaseBalance()
   t.true(
     baseBalance2
       .plus(finalBalance)
-      .minus(reportedValueAndFee3.fee.dividedBy(2))
-      .isEqualTo(baseBalance3)
-  ) // TODO why is reported fee half?
-  // assert value reported accurately
-  t.true(finalBalance.isEqualTo(reportedValueAndFee3.value))
+      .minus(reportedValueAndFee3.fee.dividedBy(2)) // TODO FIXME why is reported fee 2x?
+      .isEqualTo(baseBalance3),
+    'base layer balance matches reported balances'
+  )
+  t.true(
+    finalBalance.isEqualTo(reportedValueAndFee3.value),
+    'authorize reports correct value'
+  )
 }
 
 // Helper to test streaming between different uplinks
