@@ -15,6 +15,11 @@ import {
   MachinomySettlementEngine,
   ReadyEthereumCredential
 } from '../settlement/machinomy'
+import {
+  baseLayerBalance as getXrpBaseBalance,
+  XrpPaychanSettlementEngine,
+  ValidatedXrpSecret
+} from '../settlement/xrp-paychan'
 
 // Return configs for connecting to accounts set up in env vars.
 const ethConfig = (n: number): CredentialConfigs => {
@@ -49,6 +54,8 @@ export const addXrp = (n: number) => ({
   add
 }: SwitchApi): Promise<ReadyUplinks> => add(xrpConfig(n))
 
+// TODO add baseLayer to settlement module interface?
+// TODO can this code be more succinct?
 const getBaseLayerBalance = async (
   settler: SettlementEngines,
   credential: ReadyCredentials
@@ -62,9 +69,12 @@ const getBaseLayerBalance = async (
       return getMachinomyBaseBalance(
         settler as MachinomySettlementEngine,
         credential as ReadyEthereumCredential
-      ) // TODO add baseLayer to settlement module interface?
+      )
     case SettlementEngineType.XrpPaychan:
-      return Promise.resolve(new BigNumber(0)) // TODO write this: XrpPaychan.baseLayerBalance(credential, settler)
+      return getXrpBaseBalance(
+        settler as XrpPaychanSettlementEngine,
+        credential as ValidatedXrpSecret
+      )
   }
 }
 

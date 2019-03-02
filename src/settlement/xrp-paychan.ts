@@ -290,7 +290,15 @@ const fetchChannelCapacity = (state: State) => async (
   return new BigNumber(channel ? channel.amount : 0)
 }
 
-// TODO Can I elimiante this? (Or use the abstracted version?)
+export const baseLayerBalance = async (
+  settler: XrpPaychanSettlementEngine,
+  credential: ValidatedXrpSecret
+) => {
+  const response = await settler.api.getAccountInfo(credential.address)
+  return new BigNumber(response.xrpBalance)
+}
+
+// TODO Can I eliminate this? (Or use the abstracted version?)
 const getCredential = (state: State) => (credentialId: string) =>
   state.credentials.filter(
     (c): c is ValidatedXrpSecret =>
