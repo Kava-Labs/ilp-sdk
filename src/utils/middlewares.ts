@@ -16,8 +16,8 @@ BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
 export interface PluginWrapperOpts {
   readonly plugin: Plugin
-  readonly maxBalance?: BigNumber.Value
-  readonly maxPacketAmount?: BigNumber.Value
+  readonly maxBalance: BigNumber.Value
+  readonly maxPacketAmount: BigNumber.Value
   readonly log: Logger
   readonly assetCode: string
   readonly assetScale: number
@@ -83,8 +83,8 @@ export class PluginWrapper {
 
   constructor({
     plugin,
-    maxBalance = Infinity,
-    maxPacketAmount = Infinity,
+    maxBalance,
+    maxPacketAmount,
     log,
     store,
     assetCode,
@@ -167,7 +167,7 @@ export class PluginWrapper {
    */
 
   private async handleMoney(amount: string): Promise<void> {
-    if (new BigNumber(amount).isZero()) {
+    if (parseInt(amount, 10) <= 0) {
       return
     }
 

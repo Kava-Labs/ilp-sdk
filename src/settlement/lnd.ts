@@ -68,7 +68,7 @@ const setupEngine = async (
  * Confirm a host is semantically valid (e.g. "localhost:8080")
  * and split into component hostname and port
  */
-const splitHost = (host: string): Option<ValidHost> =>
+export const splitHost = (host: string): Option<ValidHost> =>
   tryCatch(() => new URL('https://' + host)).map(({ hostname, port }) => ({
     hostname,
     port: parseInt(port, 10)
@@ -78,8 +78,6 @@ export type ValidHost = {
   readonly hostname: string
   readonly port: number
 }
-
-// TODO Add method to validate credentials using `setupCredential` then `closeCredential`
 
 export interface ValidatedLndCredential {
   /** TODO */
@@ -97,7 +95,6 @@ export interface ValidatedLndCredential {
 export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
 
 export interface ReadyLndCredential {
-  /** TODO */
   readonly settlerType: SettlementEngineType.Lnd
   /** gRPC client connected to Lighnting node for performing requests */
   readonly service: LndService

@@ -248,7 +248,7 @@ export const connectUplink = (state: State) => (
 
   // Setup internal packet handlers and routing
   setupHandlers(
-    plugin,
+    pluginWrapper,
     clientAddress,
     (data: Buffer) => handlers.streamServerHandler(data),
     (prepare: IlpPrepare) => handlers.streamClientHandler(prepare)
@@ -290,7 +290,7 @@ export const connectUplink = (state: State) => (
  * EFFECT: registers handlers on the plugin
  */
 export const setupHandlers = (
-  plugin: Plugin,
+  plugin: PluginWrapper,
   clientAddress: string,
   streamServerHandler: DataHandler,
   streamClientHandler: IlpPrepareHandler
