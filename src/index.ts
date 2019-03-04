@@ -114,23 +114,30 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
 
   const deposit = async ({
     uplink,
-    ...opts
+    amount,
+    authorize = () => Promise.resolve()
   }: {
     readonly uplink: ReadyUplinks
     readonly amount: BigNumber
-    readonly authorize: AuthorizeDeposit
+    readonly authorize?: AuthorizeDeposit
   }): Promise<void> => {
     const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
     const internalDeposit = depositToUplink(internalUplink)
-    return internalDeposit && internalDeposit(state)(opts)
+    return (
+      internalDeposit &&
+      internalDeposit(state)({
+        amount,
+        authorize
+      })
+    )
   }
 
   const withdraw = async ({
     uplink,
-    authorize
+    authorize = () => Promise.resolve()
   }: {
     readonly uplink: ReadyUplinks
-    readonly authorize: AuthorizeWithdrawal
+    readonly authorize?: AuthorizeWithdrawal
   }) => {
     const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
     const internalWithdraw = withdrawFromUplink(internalUplink)
