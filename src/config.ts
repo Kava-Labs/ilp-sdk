@@ -19,15 +19,15 @@ export interface ConfigSchema {
 const CONFIG_DIR = `${homedir()}/.switch`
 export const CONFIG_PATH = `${CONFIG_DIR}/config.json`
 
+export const serializeConfig = (state: State) =>
+  JSON.stringify({
+    ledgerEnv: state.ledgerEnv,
+    uplinks: state.uplinks.map(uplink => uplink.config),
+    credentials: state.credentials.map(credentialToConfig)
+  })
+
 export const persistConfig = async (fd: number, state: State) =>
-  promisify(writeFile)(
-    fd,
-    JSON.stringify({
-      ledgerEnv: state.ledgerEnv,
-      uplinks: state.uplinks.map(uplink => uplink.config),
-      credentials: state.credentials.map(credentialToConfig)
-    })
-  )
+  promisify(writeFile)(fd, serializeConfig(state))
 
 export const loadConfig = async (): Promise<
   [number, ConfigSchema | undefined]
