@@ -27,7 +27,9 @@ export const serializeConfig = (state: State) =>
   })
 
 export const persistConfig = async (fd: number, state: State) =>
-  promisify(writeFile)(fd, serializeConfig(state))
+  promisify(writeFile)(fd, serializeConfig(state), {
+    flag: 'w'
+  })
 
 export const loadConfig = async (): Promise<
   [number, ConfigSchema | undefined]
