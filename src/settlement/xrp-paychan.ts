@@ -329,7 +329,7 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   const {
     validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
   } = await api.getServerInfo()
-  const fee = convert(xrpBase(10), xrp()) // TODO Calculate this (plugin should accept fee param?)
+  const fee = convert(drop(10), xrp()) // TODO Calculate this (plugin should accept fee param?)
   const minBalance =
     /* Minimum amount of XRP for every account to keep in reserve */
     +reserveBaseXRP +
