@@ -1,5 +1,22 @@
-import { SwitchApi, SettlementEngineType, ReadyUplinks } from '..'
+import BigNumber from 'bignumber.js'
 import { convert, usd } from '@kava-labs/crypto-rate-utils'
+import { ReadyUplinks, SettlementEngineType, SwitchApi } from '..'
+import { SettlementEngines } from '../engine'
+import { ReadyCredentials } from '../credential'
+import {
+  baseLayerBalance as getMachinomyBaseBalance,
+  MachinomySettlementEngine,
+  ReadyEthereumCredential
+} from '../settlement/machinomy'
+import {
+  baseLayerBalance as getXrpBaseBalance,
+  XrpPaychanSettlementEngine,
+  ValidatedXrpSecret
+} from '../settlement/xrp-paychan'
+import {
+  baseLayerBalance as getLndBaseBalance,
+  ReadyLndCredential
+} from '../settlement/lnd'
 
 export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
@@ -38,4 +55,28 @@ export const createFundedUplink = (api: SwitchApi) => async (
   })
 
   return uplink
+}
+
+// TODO add baseLayer to settlement module interface?
+// TODO can this code be more succinct?
+export const getBaseLayerBalance = async (
+  settler: SettlementEngines,
+  credential: ReadyCredentials
+): Promise<BigNumber> => {
+  switch (
+    settler.settlerType // should switch based on type check of settler? and func arg should have an interface type that the settlers fulfil
+  ) {
+    case SettlementEngineType.Lnd:
+      return getLndBaseBalance(credential as ReadyLndCredential)
+    case SettlementEngineType.Machinomy:
+      return getMachinomyBaseBalance(
+        settler as MachinomySettlementEngine,
+        credential as ReadyEthereumCredential
+      )
+    case SettlementEngineType.XrpPaychan:
+      return getXrpBaseBalance(
+        settler as XrpPaychanSettlementEngine,
+        credential as ValidatedXrpSecret
+      )
+  }
 }
