@@ -5,7 +5,8 @@ import { unlink } from 'fs'
 import { promisify } from 'util'
 import { connect, LedgerEnv, ReadyUplinks, SwitchApi } from '..'
 import { CONFIG_PATH } from '../config'
-import { addEth, addXrp } from './helpers'
+import { addEth, addXrp, addBtc, getBaseLayerBalance } from './helpers'
+import { getCredential } from '../credential'
 require('envkey')
 
 const test = anyTest as TestInterface<SwitchApi>
@@ -20,14 +21,38 @@ test.beforeEach(async t => {
 
 test.afterEach(async t => t.context.disconnect())
 
+// Helper that runs deposit/withdraw, capturing and returning the reported tx value and fees.
+// TODO add proper types
+const captureFeesFrom = (apiMethod: any) => async (params: {
+  readonly uplink: ReadyUplinks
+  readonly amount?: BigNumber
+}) => {
+  const reportedValueAndFee = { value: new BigNumber(0), fee: new BigNumber(0) }
+
+  const authorize = async (params: any) => {
+    reportedValueAndFee.value = params.value
+    reportedValueAndFee.fee = params.fee
+  }
+
+  await apiMethod({
+    ...params,
+    authorize: authorize
+  })
+
+  return reportedValueAndFee
+}
+
 // Helper to test deposit and withdraw on uplinks
 export const testFunding = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<SwitchApi>) => {
+  // SETUP ------------------------------------------
+
   const { state, deposit, withdraw, streamMoney } = t.context
   const uplink = await createUplink(t.context)
 
   const settler = state.settlers[uplink.settlerType]
+  const credential = getCredential(state)(uplink.credentialId)!
 
   // Instead down to the base unit of the ledger if there's more precision than that
   const toUplinkUnit = (unit: AssetUnit) =>
@@ -35,43 +60,65 @@ export const testFunding = (
       settler.exchangeUnit().exchangeUnit,
       BigNumber.ROUND_DOWN
     )
+  // capture reported fee from deposit and withdraw functions
+  const depositAndCapture = captureFeesFrom(deposit)
+  const withdrawAndCapture = captureFeesFrom(withdraw)
+
+  // TEST DEPOSIT (CHANNEL OPEN) ---------------------
 
   t.true(uplink.balance$.value.isZero(), 'initial layer 2 balance is 0')
 
-  // TODO Check base layer balances to make sure fees are also correctly reported!
   // TODO Check that incoming capacity is opened!
 
   // TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
+  const baseBalance1 = await getBaseLayerBalance(settler, credential)
   const openAmount = toUplinkUnit(usd(1))
-  await t.notThrowsAsync(
-    deposit({
-      uplink,
-      amount: openAmount,
-      authorize: () => Promise.resolve()
-    }),
-    'opens channel without throwing an error'
-  )
+  const valueAndfee1 = await depositAndCapture({
+    uplink,
+    amount: openAmount
+  }) // TODO check it doesn't throw?
 
   t.true(
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
-
-  const depositAmount = toUplinkUnit(usd(2))
-  await t.notThrowsAsync(
-    deposit({
-      uplink,
-      amount: depositAmount,
-      authorize: () => Promise.resolve()
-    }),
-    'deposits to channel without throwing an error'
+  const baseBalance2 = await getBaseLayerBalance(settler, credential)
+  t.true(
+    baseBalance1
+      .minus(openAmount)
+      .minus(valueAndfee1.fee)
+      .isEqualTo(baseBalance2),
+    'base layer balance matches reported balances'
+  )
+  t.true(
+    openAmount.isEqualTo(valueAndfee1.value),
+    'authorize reports correct value'
   )
 
+  // TEST DEPOSIT (TOP UP) ----------------------------
+
+  const depositAmount = toUplinkUnit(usd(2))
+  const valueAndFee2 = await depositAndCapture({
+    uplink,
+    amount: depositAmount
+  })
   t.true(
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
+  )
+  const baseBalance3 = await getBaseLayerBalance(settler, credential)
+  t.true(
+    baseBalance2
+      .minus(depositAmount)
+      .minus(valueAndFee2.fee)
+      .isEqualTo(baseBalance3),
+    'base layer balance matches reported balances'
+  )
+  t.true(
+    depositAmount.isEqualTo(valueAndFee2.value),
+    'authorize reports correct value'
   )
 
   // Rebalance so there's some money in both the incoming & outgoing channels
@@ -84,14 +131,26 @@ export const testFunding = (
     'uplink can stream money to itself'
   )
 
-  await t.notThrowsAsync(
-    withdraw({ uplink, authorize: () => Promise.resolve() }),
-    'withdraws from channel without throwing an error'
-  )
+  // TEST WITHDRAW ----------------------------------------
+
+  const withdrawAmount = uplink.balance$.value
+  const valueAndFee3 = await withdrawAndCapture({ uplink })
 
   t.true(
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
+  )
+  const baseBalance4 = await getBaseLayerBalance(settler, credential)
+  t.true(
+    baseBalance3
+      .plus(withdrawAmount)
+      .minus(valueAndFee3.fee) // TODO FIXME ethereum reports fee 2x what is actually used
+      .isEqualTo(baseBalance4),
+    'base layer balance matches reported balances'
+  )
+  t.true(
+    withdrawAmount.isEqualTo(valueAndFee3.value),
+    'authorize reports correct value'
   )
 }
 

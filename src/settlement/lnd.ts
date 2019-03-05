@@ -221,6 +221,10 @@ const connectUplink = (credential: ReadyLndCredential) => (
   }
 }
 
+export const baseLayerBalance = async (credential: ReadyLndCredential) => {
+  return credential.channelBalance$.value
+}
+
 /**
  * ------------------------------------
  * SETTLEMENT MODULE
