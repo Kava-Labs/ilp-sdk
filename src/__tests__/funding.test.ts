@@ -75,7 +75,7 @@ export const testFunding = (
 
   const baseBalance1 = await getBaseLayerBalance(settler, credential)
   const openAmount = toUplinkUnit(usd(1))
-  const valueAndfee1 = await depositAndCapture({
+  const valueAndFee1 = await depositAndCapture({
     uplink,
     amount: openAmount
   }) // TODO check it doesn't throw?
@@ -86,14 +86,17 @@ export const testFunding = (
   )
   const baseBalance2 = await getBaseLayerBalance(settler, credential)
   t.true(
-    baseBalance1
-      .minus(openAmount)
-      .minus(valueAndfee1.fee)
-      .isEqualTo(baseBalance2),
-    'base layer balance matches reported balances'
+    baseBalance1.minus(baseBalance2).isGreaterThanOrEqualTo(openAmount),
+    'amount spent covers the deposit amount'
   )
   t.true(
-    openAmount.isEqualTo(valueAndfee1.value),
+    baseBalance1
+      .minus(baseBalance2)
+      .isLessThanOrEqualTo(openAmount.plus(valueAndFee1.fee)),
+    'amount spent on fees is ≤ reported fee'
+  )
+  t.true(
+    openAmount.isEqualTo(valueAndFee1.value),
     'authorize reports correct value'
   )
 
@@ -110,11 +113,14 @@ export const testFunding = (
   )
   const baseBalance3 = await getBaseLayerBalance(settler, credential)
   t.true(
+    baseBalance2.minus(baseBalance3).isGreaterThanOrEqualTo(depositAmount),
+    'amount spent covers the deposit amount'
+  )
+  t.true(
     baseBalance2
-      .minus(depositAmount)
-      .minus(valueAndFee2.fee)
-      .isEqualTo(baseBalance3),
-    'base layer balance matches reported balances'
+      .minus(baseBalance3)
+      .isLessThanOrEqualTo(depositAmount.plus(valueAndFee2.fee)),
+    'amount spent on fee is ≤ reported fee'
   )
   t.true(
     depositAmount.isEqualTo(valueAndFee2.value),
@@ -142,11 +148,14 @@ export const testFunding = (
   )
   const baseBalance4 = await getBaseLayerBalance(settler, credential)
   t.true(
-    baseBalance3
-      .plus(withdrawAmount)
-      .minus(valueAndFee3.fee) // TODO FIXME ethereum reports fee 2x what is actually used
-      .isEqualTo(baseBalance4),
-    'base layer balance matches reported balances'
+    baseBalance4.minus(baseBalance3).isLessThanOrEqualTo(withdrawAmount),
+    "didn't get more money back than was withdrawn"
+  )
+  t.true(
+    baseBalance4
+      .minus(baseBalance3)
+      .isGreaterThanOrEqualTo(withdrawAmount.minus(valueAndFee3.fee)),
+    'amount spent on fee ≤ reported fee'
   )
   t.true(
     withdrawAmount.isEqualTo(valueAndFee3.value),
