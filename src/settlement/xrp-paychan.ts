@@ -121,6 +121,14 @@ export const configFromXrpCredential = ({
  * ------------------------------------
  */
 
+// Estimate all ripple tx fees as a high fixed value as a temporary solution.
+// Problems:
+//  - plugins do not allow us to set the fee for txs
+//  - plugins do not allow authorization of every tx (so account balance can be spent in the background, making exact balance checks impossible)
+// Current solution is to over estimate fees so that in practice the amount spent will always be lower that estimated.
+// The default tx fee for ripple api is 12 drops for a normal tx. (base fee of 10 drops x feeCushion of 1.2 (https://developers.ripple.com/rippleapi-reference.html))
+const ESTIMATED_XRP_TX_FEE = convert(drop(50), xrp())
+
 export interface XrpPaychanBaseUplink extends BaseUplink {
   readonly settlerType: SettlementEngineType.XrpPaychan
   readonly credentialId: string
@@ -329,7 +337,6 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   const {
     validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
   } = await api.getServerInfo()
-  const fee = convert(drop(10), xrp()) // TODO Calculate this (plugin should accept fee param?)
   const minBalance =
     /* Minimum amount of XRP for every account to keep in reserve */
     +reserveBaseXRP +
@@ -338,9 +345,8 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
     /** Additional reserve this channel requires, in XRP */
     +reserveIncrementXRP +
     /** Amount to fund the channel, in XRP */
-    +amount +
-    /** Assume channel creation fee of 10 drops (unclear) */
-    +fee
+    +amount + // TODO fix this
+    /** Allow buffer of tx fees to cover this tx and possible background txs submitted by the xrp plugin */ +ESTIMATED_XRP_TX_FEE
   const currentBalance = +xrpBalance
   if (currentBalance < minBalance) {
     // TODO Return a specific type of error
@@ -353,7 +359,7 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   // TODO Should the promise reject if unauthorized?
   await authorize({
     value: amount /** XRP */,
-    fee /** XRP */
+    fee: ESTIMATED_XRP_TX_FEE /** XRP */
   })
 
   // Check if we need to create a new channel or deposit to an existing channel
@@ -394,9 +400,8 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
 
   // Prompt the user to authorize the withdrawal
   // TODO Add actual fee calculation to the XRP plugins
-  const fee = convert(drop(10), xrp())
   const value = uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value)
-  await authorize({ fee, value })
+  await authorize({ value, fee: ESTIMATED_XRP_TX_FEE })
 
   // Submit latest claim and close the incoming channel
   await uplink.plugin._autoClaim(true)
