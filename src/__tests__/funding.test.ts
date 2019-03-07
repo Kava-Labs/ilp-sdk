@@ -149,7 +149,7 @@ export const testFunding = (
   const baseBalance4 = await getBaseLayerBalance(settler, credential)
   t.true(
     baseBalance4.minus(baseBalance3).isLessThanOrEqualTo(withdrawAmount),
-    "didn't get more money back than was withdrawn"
+    'did not get back more money than was withdrawn'
   )
   t.true(
     baseBalance4
