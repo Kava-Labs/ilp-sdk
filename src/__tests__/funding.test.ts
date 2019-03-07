@@ -87,13 +87,13 @@ export const testFunding = (
   const baseBalance2 = await getBaseLayerBalance(settler, credential)
   t.true(
     baseBalance1.minus(baseBalance2).isGreaterThanOrEqualTo(openAmount),
-    'amount spent covers the deposit amount'
+    'amount spent is ≥ the deposit amount'
   )
   t.true(
     baseBalance1
       .minus(baseBalance2)
       .isLessThanOrEqualTo(openAmount.plus(valueAndFee1.fee)),
-    'amount spent on fees is ≤ reported fee'
+    'amount spent is ≤ reported fee + deposit amount'
   )
   t.true(
     openAmount.isEqualTo(valueAndFee1.value),
@@ -114,13 +114,13 @@ export const testFunding = (
   const baseBalance3 = await getBaseLayerBalance(settler, credential)
   t.true(
     baseBalance2.minus(baseBalance3).isGreaterThanOrEqualTo(depositAmount),
-    'amount spent covers the deposit amount'
+    'amount spent is ≥ the deposit amount'
   )
   t.true(
     baseBalance2
       .minus(baseBalance3)
       .isLessThanOrEqualTo(depositAmount.plus(valueAndFee2.fee)),
-    'amount spent on fee is ≤ reported fee'
+    'amount spent is ≤ reported fee + deposit amount'
   )
   t.true(
     depositAmount.isEqualTo(valueAndFee2.value),
@@ -155,7 +155,7 @@ export const testFunding = (
     baseBalance4
       .minus(baseBalance3)
       .isGreaterThanOrEqualTo(withdrawAmount.minus(valueAndFee3.fee)),
-    'amount spent on fee ≤ reported fee'
+    'did not get back less money than was expected'
   )
   t.true(
     withdrawAmount.isEqualTo(valueAndFee3.value),
