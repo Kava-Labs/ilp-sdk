@@ -82,10 +82,10 @@ export type ReadyEthereumCredential = {
 }
 
 /**
- * Ensure that the given string is begins with given prefix
+ * Ensure that the given string begins with given prefix
  * - Prefix the string if it doesn't already
  */
-const prefixWith = (prefix: string, str: string) =>
+const ensurePrefixedWith = (prefix: string, str: string) =>
   str.startsWith(prefix) ? str : prefix + str
 
 const addressFromPrivate = (privateKey: string) =>
@@ -99,8 +99,11 @@ export const setupCredential = ({
   ReadyEthereumCredential
 > => ({
   settlerType,
-  privateKey: prefixWith('0x', privateKey),
-  address: prefixWith('0x', addressFromPrivate(prefixWith('0x', privateKey)))
+  privateKey: ensurePrefixedWith('0x', privateKey),
+  address: ensurePrefixedWith(
+    '0x',
+    addressFromPrivate(ensurePrefixedWith('0x', privateKey))
+  )
 })
 
 export const uniqueId = (cred: ReadyEthereumCredential) => cred.address

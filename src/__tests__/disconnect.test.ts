@@ -17,8 +17,12 @@ test.beforeEach(async t => {
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
+test('after connect', async t => {
+  await t.notThrowsAsync(t.context.disconnect())
+})
+
 test('after add eth', async t => {
-  const uplink = await addEth()(t.context)
+  await addEth()(t.context)
   await t.notThrowsAsync(t.context.disconnect())
 })
 

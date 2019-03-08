@@ -26,9 +26,9 @@ export const serializeConfig = (state: State) =>
     credentials: state.credentials.map(credentialToConfig)
   })
 
-export const persistConfig = async (fd: number, state: State) => {
-  await promisify(ftruncate)(fd) // r+ mode doesn't overwrite, so first delete file contents
-  await promisify(writeFile)(fd, serializeConfig(state))
+export const persistConfig = async (fileDescriptor: number, state: State) => {
+  await promisify(ftruncate)(fileDescriptor) // r+ mode doesn't overwrite, so first delete file contents
+  await promisify(writeFile)(fileDescriptor, serializeConfig(state))
 }
 
 /**
@@ -46,7 +46,7 @@ export const loadConfig = async (): Promise<
     else throw err
   })
 
-  const fd = await promisify(open)(CONFIG_PATH, 'r+').catch(err => {
+  const fileDescriptor = await promisify(open)(CONFIG_PATH, 'r+').catch(err => {
     if (err.code === 'ENOENT') {
       return promisify(open)(CONFIG_PATH, 'w+')
     } else {
@@ -54,12 +54,15 @@ export const loadConfig = async (): Promise<
     }
   })
 
-  const content = await promisify(readFile)(fd, {
+  const content = await promisify(readFile)(fileDescriptor, {
     encoding: 'utf8'
   })
 
   // TODO Add *robust* schema validation
-  return [fd, content.length === 0 ? undefined : JSON.parse(content)]
+  return [
+    fileDescriptor,
+    content.length === 0 ? undefined : JSON.parse(content)
+  ]
 }
 
 /**
