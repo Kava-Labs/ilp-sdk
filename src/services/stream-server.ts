@@ -37,23 +37,23 @@ export const wrapStreamPlugin = (
   plugin: Plugin,
   registerDataHandler: (handler: DataHandler) => void
 ): IlpStreamPlugin => ({
-  connect() {
+  connect(): Promise<void> {
     return plugin.connect()
   },
-  disconnect() {
+  disconnect(): Promise<void> {
     // Don't let Stream disconnect the plugin
     return Promise.resolve()
   },
-  isConnected() {
+  isConnected(): boolean {
     return plugin.isConnected()
   },
-  sendData(data) {
+  sendData(data): Promise<Buffer> {
     return plugin.sendData(data)
   },
-  registerDataHandler(handler) {
+  registerDataHandler(handler): void {
     registerDataHandler(handler)
   },
-  deregisterDataHandler() {
+  deregisterDataHandler(): void {
     registerDataHandler(defaultDataHandler)
   }
 })

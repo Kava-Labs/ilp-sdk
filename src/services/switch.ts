@@ -17,6 +17,9 @@ const log = createLogger('switch-api:stream')
 
 BigNumber.config({ EXPONENTIAL_AT: 1e9 }) // Almost never use exponential notation
 
+// TODO Remove this rule... fix this eventually!
+/* tslint:disable:no-let */
+
 /** End stream if no packets are successfully fulfilled within this interval */
 const IDLE_TIMEOUT = 10000
 
@@ -39,17 +42,17 @@ export const streamMoney = (state: State) => async ({
   slippage = 0.01
 }: {
   /** Amount of money to be sent over stream, in units of exchange */
-  amount: BigNumber
+  readonly amount: BigNumber
   /** Send assets via the given source ledger/plugin */
-  source: ReadyUplinks
+  readonly source: ReadyUplinks
   /** Receive assets via the given destination ledger/plugin */
-  dest: ReadyUplinks
+  readonly dest: ReadyUplinks
   /**
    * Maximum percentage of slippage allowed. If the per-packet exchange rate
    * drops below the price oracle's rate minus this slippage,
    * the packet will be rejected
    */
-  slippage?: BigNumber.Value
+  readonly slippage?: BigNumber.Value
 }): Promise<void> => {
   const sourceSettler = state.settlers[source.settlerType]
   const destSettler = state.settlers[dest.settlerType]

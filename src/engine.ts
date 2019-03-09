@@ -1,12 +1,11 @@
 import { AssetUnit } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import { LndSettlementEngine, Lnd } from './settlement/lnd'
+import { LndSettlementEngine } from './settlement/lnd'
 import {
   XrpPaychanSettlementEngine,
-  XrpPaychan
+  closeXrpPaychanEngine
 } from './settlement/xrp-paychan'
-import { State, LedgerEnv } from '.'
-import { Machinomy } from './settlement/machinomy'
+import { MachinomySettlementEngine } from './settlement/machinomy'
 
 export enum SettlementEngineType {
   /** Lightning daeman */
@@ -18,42 +17,29 @@ export enum SettlementEngineType {
 }
 
 export interface SettlementEngine {
-  settlerType: SettlementEngineType // TODO
-
-  assetCode: string
-  assetScale: number
-  baseUnit: (amount?: BigNumber.Value) => AssetUnit
-  exchangeUnit: (amount?: BigNumber.Value) => AssetUnit
+  readonly settlerType: SettlementEngineType
+  readonly assetCode: string
+  readonly assetScale: number
+  readonly baseUnit: (amount?: BigNumber.Value) => AssetUnit
+  readonly exchangeUnit: (amount?: BigNumber.Value) => AssetUnit
   /**
    * Mapping of BTP websocket URIs for remote connectors,
    * specific to the ledger env of the settlement engine
    */
-  remoteConnectors: {
+  readonly remoteConnectors: {
     readonly [name: string]: (token: string) => string
   }
 }
 
-export type SettlementEngines = LndSettlementEngine | XrpPaychanSettlementEngine
+export type SettlementEngines = (
+  | LndSettlementEngine
+  | MachinomySettlementEngine
+  | XrpPaychanSettlementEngine) &
+  SettlementEngine
 
-// TODO Add "closeEngine" to specific settlement modules
-export const closeEngine = (settler: SettlementEngines) => {
+export const closeEngine = async (settler: SettlementEngines) => {
   switch (settler.settlerType) {
-    case SettlementEngineType.Lnd:
-      return
     case SettlementEngineType.XrpPaychan:
-      return
-  }
-}
-
-export const createEngine = (ledgerEnv: LedgerEnv) => async (
-  settlerType: SettlementEngineType
-): Promise<SettlementEngines> => {
-  switch (settlerType) {
-    case SettlementEngineType.Lnd:
-      return Lnd.setupEngine(ledgerEnv)
-    case SettlementEngineType.Machinomy:
-      return Machinomy.setupEngine(ledgerEnv)
-    case SettlementEngineType.XrpPaychan:
-      return XrpPaychan.setupEngine(ledgerEnv)
+      return closeXrpPaychanEngine(settler)
   }
 }

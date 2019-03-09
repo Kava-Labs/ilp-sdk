@@ -63,10 +63,10 @@ declare module '@kava-labs/ilp-plugin-xrp-asym-client' {
     _performConnectHandshake(): Promise<void>
 
     /**
-     * Submit the incoming claim to the ledger as a checkpoint,
-     * if it's profitable
+     * Submit the incoming claim to the ledger as a checkpoint, if it's profitable
+     * @param closeChannel Should the transaction also close the channel (true), or not (false, by default)?
      */
-    _autoClaim(): Promise<void>
+    _autoClaim(closeChannel: boolean): Promise<void>
 
     /** Outgoing payment channel claim signature and amount in base units (-9) */
     _lastClaim?: PaymentChannelClaim

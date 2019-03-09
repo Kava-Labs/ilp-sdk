@@ -1,10 +1,5 @@
-import { createHash, createHmac, randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { promisify } from 'util'
-
-export const hmac = (key: string | Buffer, message: string | Buffer) =>
-  createHmac('sha256', key)
-    .update(message)
-    .digest()
 
 export const sha256 = (preimage: string | Buffer) =>
   createHash('sha256')

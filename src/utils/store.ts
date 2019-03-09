@@ -1,16 +1,17 @@
 export interface PluginStore {
-  get: (key: string) => Promise<string | void>
-  put: (key: string, value: string) => Promise<void>
-  del: (key: string) => Promise<void>
+  readonly get: (key: string) => Promise<string | void>
+  readonly put: (key: string, value: string) => Promise<void>
+  readonly del: (key: string) => Promise<void>
 }
 
 export interface SimpleStore {
+  /* tslint:disable-next-line:readonly-keyword TODO */
   [key: string]: string
 }
 
 export class MemoryStore implements PluginStore {
-  private store: SimpleStore
-  private prefix: string
+  private readonly store: SimpleStore
+  private readonly prefix: string
 
   constructor(store: SimpleStore = {}, prefix = '') {
     this.store = store

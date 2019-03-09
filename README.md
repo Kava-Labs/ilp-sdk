@@ -48,6 +48,7 @@ Create an instance of the API, which automatically connects to the underlying le
 import { connect, LedgerEnv, SettlementEngineType } from '@kava-labs/switch-api'
 
 // Connect to testnet
+// (State is loaded and persisted to ~/.switch/config.json automatically)
 const api = await connect()
 
 // Alternatively, run a local connector using Kava's connector-config
@@ -229,7 +230,7 @@ await api.disconnect()
 
 ## Known Issues
 
-- Currently, no state is persisted, meaning payment channels claims and credentials are not saved after the session ends. We've architected the API to enable this, and it's a top priority within the next week or two.
+- Persisted private keys, secrets and other data is currently stored **unencrypted**.
 - By design, clients do not currently pay for incoming capacity on ETH nor XRP. However, that's not a sustainable solution. In order to scale and prevent liquidity denial of service attacks, clients should pay a fee to "buy" incoming capacity/bandwidth for a period of time. However, this negotiation and accounting adds a great deal of complexity.
 - Uplinks don't operate an internal `ilp-connector`, which may introduce some minor security risks. We intend to update this after the internal plugin architecture is refactored.
 - Machinomy payment channels don't currently support watchtowers, which can become a security risk if a client is offline for an extended period of time and the connector disputes the channel. (In XRP, this is less of an issue, since the on-chain fees are low enough that regular checkpoints of the latest claim can be submitted to the ledger).
@@ -237,7 +238,7 @@ await api.disconnect()
 
 ## Roadmap
 
-- [ ] Persistence and encryption of the configuration, so the uplinks and payment channel claims are restored between sessions (very soon)
+- [ ] Encryption of stored credentials
 - [ ] Internal refactoring/improving code quality
 - [ ] Support for user-defined connectors
 - [ ] Additional assets, including ERC-20 tokens such as DAI

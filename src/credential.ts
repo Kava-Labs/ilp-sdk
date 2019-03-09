@@ -2,32 +2,35 @@ import { SettlementEngineType } from './engine'
 import {
   ValidatedLndCredential,
   ReadyLndCredential,
-  Lnd
+  Lnd,
+  configFromLndCredential
 } from './settlement/lnd'
 import {
   UnvalidatedXrpSecret,
   ValidatedXrpSecret,
-  XrpPaychan
+  XrpPaychan,
+  configFromXrpCredential
 } from './settlement/xrp-paychan'
 import { State } from '.'
 import {
   Machinomy,
   ReadyEthereumCredential,
-  ValidatedEthereumPrivateKey
+  ValidatedEthereumPrivateKey,
+  configFromEthereumCredential
 } from './settlement/machinomy'
 
 export type CredentialConfigs = (
   | ValidatedLndCredential
   | ValidatedEthereumPrivateKey
   | UnvalidatedXrpSecret) & {
-  settlerType: SettlementEngineType
+  readonly settlerType: SettlementEngineType
 }
 
 export type ReadyCredentials = (
   | ReadyLndCredential
   | ReadyEthereumCredential
   | ValidatedXrpSecret) & {
-  settlerType: SettlementEngineType
+  readonly settlerType: SettlementEngineType
 }
 
 export const setupCredential = (credential: CredentialConfigs) => {
@@ -41,7 +44,7 @@ export const setupCredential = (credential: CredentialConfigs) => {
   }
 }
 
-// TODO Should this also check the settlerType of the credential? Or could there be a hash/unique id?
+// TODO Should this also check the settlerType of the credential? Or could there be a hash/uniqueId?
 export const getCredential = (state: State) => <
   TReadyCredential extends ReadyCredentials
 >(
@@ -81,14 +84,14 @@ export const getCredentialId = (credential: ReadyCredentials) => {
   }
 }
 
-export const closeCredential = (credential: ReadyCredentials) => {
+export const closeCredential = async (credential: ReadyCredentials) => {
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.closeCredential(credential)
     case SettlementEngineType.Machinomy:
-      return Machinomy.closeCredential(credential)
+      return
     case SettlementEngineType.XrpPaychan:
-      return XrpPaychan.closeCredential(credential)
+      return
   }
 }
 
@@ -104,3 +107,16 @@ export const isThatCredential = <TReadyCredential extends ReadyCredentials>(
 ) => (someCredential: ReadyCredentials): someCredential is TReadyCredential =>
   someCredential.settlerType === credential.settlerType &&
   getCredentialId(someCredential) === getCredentialId(credential)
+
+export const credentialToConfig = (
+  credential: ReadyCredentials
+): CredentialConfigs => {
+  switch (credential.settlerType) {
+    case SettlementEngineType.Lnd:
+      return configFromLndCredential(credential)
+    case SettlementEngineType.Machinomy:
+      return configFromEthereumCredential(credential)
+    case SettlementEngineType.XrpPaychan:
+      return configFromXrpCredential(credential)
+  }
+}
