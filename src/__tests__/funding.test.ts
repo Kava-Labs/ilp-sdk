@@ -5,8 +5,10 @@ import { unlink } from 'fs'
 import { promisify } from 'util'
 import { connect, LedgerEnv, ReadyUplinks, SwitchApi } from '..'
 import { CONFIG_PATH } from '../config'
-import { addEth, addXrp, addBtc, getBaseLayerBalance } from './helpers'
+import { addEth, addXrp, addBtc } from './helpers'
 import { getCredential } from '../credential'
+import { ReadyMachinomyUplink } from '../settlement/machinomy'
+import { ReadyXrpPaychanUplink } from '../settlement/xrp-paychan'
 require('envkey')
 
 const test = anyTest as TestInterface<SwitchApi>
@@ -48,11 +50,10 @@ export const testFunding = (
 ) => async (t: ExecutionContext<SwitchApi>) => {
   // SETUP ------------------------------------------
 
-  const { state, deposit, withdraw, streamMoney } = t.context
+  const { state, deposit, withdraw, streamMoney, getBaseBalance } = t.context
   const uplink = await createUplink(t.context)
 
   const settler = state.settlers[uplink.settlerType]
-  const credential = getCredential(state)(uplink.credentialId)!
 
   // Instead down to the base unit of the ledger if there's more precision than that
   const toUplinkUnit = (unit: AssetUnit) =>
@@ -71,7 +72,7 @@ export const testFunding = (
   // TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
-  const baseBalance1 = await getBaseLayerBalance(settler, credential)
+  const baseBalance1 = await getBaseBalance(uplink)
   const openAmount = toUplinkUnit(usd(1))
   const valueAndFee1 = await depositAndCapture({
     uplink,
@@ -82,7 +83,7 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
-  const baseBalance2 = await getBaseLayerBalance(settler, credential)
+  const baseBalance2 = await getBaseBalance(uplink)
   t.true(
     baseBalance1.minus(baseBalance2).isGreaterThanOrEqualTo(openAmount),
     'amount spent is ≥ the deposit amount'
@@ -113,7 +114,7 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
-  const baseBalance3 = await getBaseLayerBalance(settler, credential)
+  const baseBalance3 = await getBaseBalance(uplink)
   t.true(
     baseBalance2.minus(baseBalance3).isGreaterThanOrEqualTo(depositAmount),
     'amount spent is ≥ the deposit amount'
@@ -148,7 +149,7 @@ export const testFunding = (
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
-  const baseBalance4 = await getBaseLayerBalance(settler, credential)
+  const baseBalance4 = await getBaseBalance(uplink)
   t.true(
     baseBalance4.minus(baseBalance3).isLessThanOrEqualTo(withdrawAmount),
     'did not get back more money than was withdrawn'

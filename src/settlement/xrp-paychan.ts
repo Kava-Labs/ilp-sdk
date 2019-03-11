@@ -252,7 +252,7 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     )
     .subscribe(incomingCapacity$)
 
-  // Load the intiial channel state
+  // Load the initial channel state
   plugin.once('connect', async () => {
     incomingChannelAmount$.next(await refreshIncomingChannel(state)(plugin))
     outgoingChannelAmount$.next(await refreshOutgoingChannel(state)(plugin))
@@ -300,7 +300,7 @@ const fetchChannelCapacity = (state: State) => async (
   return new BigNumber(channel ? channel.amount : 0)
 }
 
-export const baseLayerBalance = async (
+export const getBaseBalance = async (
   settler: XrpPaychanSettlementEngine,
   credential: ValidatedXrpSecret
 ) => {
@@ -443,5 +443,6 @@ export const XrpPaychan = {
   uniqueId,
   connectUplink,
   deposit,
-  withdraw
+  withdraw,
+  getBaseBalance
 }
