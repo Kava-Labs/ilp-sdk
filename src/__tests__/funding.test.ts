@@ -68,8 +68,6 @@ export const testFunding = (
 
   t.true(uplink.balance$.value.isZero(), 'initial layer 2 balance is 0')
 
-  // TODO Check that incoming capacity is opened!
-
   // TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
@@ -99,6 +97,10 @@ export const testFunding = (
     openAmount.isEqualTo(valueAndFee1.value),
     'authorize reports correct value'
   )
+  t.true(
+    uplink.incomingCapacity$.value.isGreaterThan(new BigNumber(0)),
+    'there is incoming capacity to us after a deposit'
+  )
 
   // TEST DEPOSIT (TOP UP) ----------------------------
 
@@ -127,6 +129,8 @@ export const testFunding = (
     'authorize reports correct value'
   )
 
+  // TEST WITHDRAW ----------------------------------------
+
   // Rebalance so there's some money in both the incoming & outgoing channels
   await t.notThrowsAsync(
     streamMoney({
@@ -136,8 +140,6 @@ export const testFunding = (
     }),
     'uplink can stream money to itself'
   )
-
-  // TEST WITHDRAW ----------------------------------------
 
   const withdrawAmount = uplink.balance$.value
   const valueAndFee3 = await withdrawAndCapture({ uplink })
