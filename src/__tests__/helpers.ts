@@ -1,5 +1,7 @@
+import { BigNumber } from 'bignumber.js'
 import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import { ReadyUplinks, SettlementEngineType, SwitchApi } from '..'
+import { AuthorizeDeposit, AuthorizeWithdrawal } from '../uplink'
 
 export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
@@ -38,4 +40,24 @@ export const createFundedUplink = (api: SwitchApi) => async (
   })
 
   return uplink
+}
+
+// Helper that runs deposit/withdraw, capturing and returning the reported tx value and fees.
+export const captureFeesFrom = (apiMethod: any) => async (params: {
+  readonly uplink: ReadyUplinks
+  readonly amount?: BigNumber
+}) => {
+  const reportedValueAndFee = { value: new BigNumber(0), fee: new BigNumber(0) }
+
+  const authorize: AuthorizeDeposit | AuthorizeWithdrawal = async params => {
+    reportedValueAndFee.value = params.value
+    reportedValueAndFee.fee = params.fee
+  }
+
+  await apiMethod({
+    ...params,
+    authorize: authorize
+  })
+
+  return reportedValueAndFee
 }

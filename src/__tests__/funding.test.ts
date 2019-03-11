@@ -5,10 +5,7 @@ import { unlink } from 'fs'
 import { promisify } from 'util'
 import { connect, LedgerEnv, ReadyUplinks, SwitchApi } from '..'
 import { CONFIG_PATH } from '../config'
-import { addEth, addXrp, addBtc } from './helpers'
-import { getCredential } from '../credential'
-import { ReadyMachinomyUplink } from '../settlement/machinomy'
-import { ReadyXrpPaychanUplink } from '../settlement/xrp-paychan'
+import { addEth, addXrp, addBtc, captureFeesFrom } from './helpers'
 require('envkey')
 
 const test = anyTest as TestInterface<SwitchApi>
@@ -22,27 +19,6 @@ test.beforeEach(async t => {
 })
 
 test.afterEach(async t => t.context.disconnect())
-
-// Helper that runs deposit/withdraw, capturing and returning the reported tx value and fees.
-// TODO add proper types
-const captureFeesFrom = (apiMethod: any) => async (params: {
-  readonly uplink: ReadyUplinks
-  readonly amount?: BigNumber
-}) => {
-  const reportedValueAndFee = { value: new BigNumber(0), fee: new BigNumber(0) }
-
-  const authorize = async (params: any) => {
-    reportedValueAndFee.value = params.value
-    reportedValueAndFee.fee = params.fee
-  }
-
-  await apiMethod({
-    ...params,
-    authorize: authorize
-  })
-
-  return reportedValueAndFee
-}
 
 // Helper to test deposit and withdraw on uplinks
 export const testFunding = (
@@ -77,7 +53,7 @@ export const testFunding = (
   const valueAndFee1 = await depositAndCapture({
     uplink,
     amount: openAmount
-  }) // TODO check it doesn't throw?
+  })
 
   t.true(
     uplink.balance$.value.isEqualTo(openAmount),
