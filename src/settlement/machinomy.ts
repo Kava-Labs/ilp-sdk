@@ -217,7 +217,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   }
 }
 
-export const baseLayerBalance = async (
+export const getBaseBalance = async (
   settler: MachinomySettlementEngine,
   credential: ReadyEthereumCredential
 ) => {
@@ -291,5 +291,6 @@ export const Machinomy = {
   uniqueId,
   connectUplink,
   deposit,
-  withdraw
+  withdraw,
+  getBaseBalance
 }

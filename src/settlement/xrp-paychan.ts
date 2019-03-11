@@ -320,5 +320,6 @@ export const XrpPaychan = {
   uniqueId,
   connectUplink,
   deposit,
-  withdraw
+  withdraw,
+  getBaseBalance
 }

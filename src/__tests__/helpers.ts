@@ -45,25 +45,3 @@ export const createFundedUplink = (api: SwitchApi) => async (
 
   return uplink
 }
-
-// TODO move this function to a general api method?
-// TODO can this code be more succinct?
-export const getBaseLayerBalance = async (
-  settler: SettlementEngines,
-  credential: ReadyCredentials
-): Promise<BigNumber> => {
-  switch (settler.settlerType) {
-    case SettlementEngineType.Lnd:
-      return getLndBaseBalance(credential as ReadyLndCredential)
-    case SettlementEngineType.Machinomy:
-      return getMachinomyBaseBalance(
-        settler as MachinomySettlementEngine,
-        credential as ReadyEthereumCredential
-      )
-    case SettlementEngineType.XrpPaychan:
-      return getXrpBaseBalance(
-        settler as XrpPaychanSettlementEngine,
-        credential as ValidatedXrpSecret
-      )
-  }
-}
