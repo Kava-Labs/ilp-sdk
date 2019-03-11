@@ -66,7 +66,7 @@ export interface State {
 }
 
 export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
-  const [fd, config] = await loadConfig()
+  const [fileDescriptor, config] = await loadConfig()
 
   // TODO Make sure the config has the right ledgerEnv to support multiple? Idk
 
@@ -101,7 +101,10 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
       )
     : []
 
-  const saveInterval = setInterval(() => persistConfig(fd, state), 10000)
+  const saveInterval = setInterval(
+    () => persistConfig(fileDescriptor, state),
+    10000
+  )
 
   const add = async (
     credentialConfig: CredentialConfigs
@@ -168,11 +171,11 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
 
   const disconnect = async () => {
     clearInterval(saveInterval)
-    await persistConfig(fd, state)
+    await persistConfig(fileDescriptor, state)
     await Promise.all(state.uplinks.map(closeUplink))
     await Promise.all(state.credentials.map(closeCredential))
     await Promise.all(Object.values(state.settlers).map(closeEngine))
-    await promisify(close)(fd)
+    await promisify(close)(fileDescriptor)
   }
 
   // TODO Should disconnecting the API prevent other operations from occuring? (they may not work anyways)

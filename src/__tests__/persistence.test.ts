@@ -23,14 +23,10 @@ test('persists state locally', async t => {
   const initialSerializedConfig = await readConfig()
 
   // Reconnect the API
-  await t.notThrowsAsync(async () => {
-    const newApi = await connect(process.env.LEDGER_ENV! as LedgerEnv)
-
-    t.is(newApi.state.credentials.length, 3, 'same number of credentials')
-    t.is(newApi.state.uplinks.length, 3, 'same number of uplink')
-
-    await newApi.disconnect()
-  }, 'connects api using existing config')
+  const newApi = await connect(process.env.LEDGER_ENV! as LedgerEnv)
+  t.is(newApi.state.credentials.length, 3, 'same number of credentials')
+  t.is(newApi.state.uplinks.length, 3, 'same number of uplink')
+  await newApi.disconnect()
 
   const rebuiltSerializedConfig = await readConfig()
 

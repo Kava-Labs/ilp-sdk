@@ -1,7 +1,7 @@
 import { LedgerEnv, State } from '.'
 import { CredentialConfigs, credentialToConfig } from './credential'
 import { BaseUplinkConfig } from './uplink'
-import { open, readFile, writeFile, mkdir } from 'fs'
+import { open, readFile, writeFile, mkdir, ftruncate } from 'fs'
 import { promisify } from 'util'
 import { homedir } from 'os'
 import { hash, verify, argon2id } from 'argon2'
@@ -26,9 +26,18 @@ export const serializeConfig = (state: State) =>
     credentials: state.credentials.map(credentialToConfig)
   })
 
-export const persistConfig = async (fd: number, state: State) =>
-  promisify(writeFile)(fd, serializeConfig(state))
+export const persistConfig = async (fileDescriptor: number, state: State) => {
+  await promisify(ftruncate)(fileDescriptor) // r+ mode doesn't overwrite, so first delete file contents
+  await promisify(writeFile)(fileDescriptor, serializeConfig(state))
+}
 
+/**
+ * - Opening the file in "w+" mode truncates/deletes the existing content
+ * - Opening the file in "a+" mode doesn't work on Linux, since positional writes are ignored
+ *   when the file is opened in append mode, and won't replace the existing content
+ * - Opening the file in "r+" mode allows reading and writing, but fails if the file doesn't
+ *   exist (race condition). More importantly, it doesn't allow truncating/deleting the file
+ */
 export const loadConfig = async (): Promise<
   [number, ConfigSchema | undefined]
 > => {
@@ -37,14 +46,23 @@ export const loadConfig = async (): Promise<
     else throw err
   })
 
-  const fd = await promisify(open)(CONFIG_PATH, 'a+')
+  const fileDescriptor = await promisify(open)(CONFIG_PATH, 'r+').catch(err => {
+    if (err.code === 'ENOENT') {
+      return promisify(open)(CONFIG_PATH, 'w+')
+    } else {
+      throw err
+    }
+  })
 
-  const content = await promisify(readFile)(fd, {
+  const content = await promisify(readFile)(fileDescriptor, {
     encoding: 'utf8'
   })
 
   // TODO Add *robust* schema validation
-  return [fd, content.length === 0 ? undefined : JSON.parse(content)]
+  return [
+    fileDescriptor,
+    content.length === 0 ? undefined : JSON.parse(content)
+  ]
 }
 
 /**
