@@ -144,7 +144,7 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
   }) => {
     const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
     const internalWithdraw = withdrawFromUplink(internalUplink)
-    return internalWithdraw && internalWithdraw(state)(authorize)
+    return internalWithdraw && internalWithdraw(authorize)
   }
 
   // TODO Create a composite "id" for uplinks based on serverUri, settlerType & credentialId?

@@ -1,13 +1,21 @@
-import { convert, drop, xrp, xrpBase, usd } from '@kava-labs/crypto-rate-utils'
-import XrpAsymClient, {
-  PaymentChannelClaim
-} from '@kava-labs/ilp-plugin-xrp-asym-client'
-import BigNumber from 'bignumber.js'
-import { createSubmitter } from 'ilp-plugin-xrp-paychan-shared'
+import { convert, drop, xrp, usd } from '@kava-labs/crypto-rate-utils'
+import XrpPlugin, {
+  XrpAccount,
+  remainingInChannel,
+  spentFromChannel,
+  PaymentChannel,
+  ClaimablePaymentChannel
+} from '@kava-labs/ilp-plugin-xrp-paychan'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { FormattedPaymentChannel, RippleAPI } from 'ripple-lib'
-import { BehaviorSubject, combineLatest, Observable, Subject } from 'rxjs'
-import { filter, map } from 'rxjs/operators'
+import {
+  BehaviorSubject,
+  combineLatest,
+  Observable,
+  Subject,
+  fromEvent
+} from 'rxjs'
+import { filter, map, first, timeout } from 'rxjs/operators'
 import { Flavor } from 'types/util'
 import { LedgerEnv, State } from '..'
 import { isThatCredentialId } from '../credential'
@@ -21,6 +29,7 @@ import {
 } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
+import BigNumber from 'bignumber.js'
 
 const log = createLogger('switch-api:xrp-paychan')
 
@@ -51,8 +60,8 @@ const setupEngine = async (
   return {
     settlerType: SettlementEngineType.XrpPaychan,
     assetCode: 'XRP',
-    assetScale: 9,
-    baseUnit: xrpBase,
+    assetScale: 6,
+    baseUnit: drop,
     exchangeUnit: xrp,
     remoteConnectors: {
       local: {
@@ -124,9 +133,8 @@ export const configFromXrpCredential = ({
 export interface XrpPaychanBaseUplink extends BaseUplink {
   readonly settlerType: SettlementEngineType.XrpPaychan
   readonly credentialId: string
-  readonly plugin: XrpAsymClient
-  readonly incomingChannelAmount$: BehaviorSubject<BigNumber>
-  readonly outgoingChannelAmount$: BehaviorSubject<BigNumber>
+  readonly plugin: XrpPlugin
+  readonly pluginAccount: XrpAccount
 }
 
 export type ReadyXrpPaychanUplink = XrpPaychanBaseUplink & ReadyUplink
@@ -140,16 +148,12 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
   const { secret } = credential
   const xrpServer = getXrpServerWebsocketUri(state.ledgerEnv)
 
-  // TODO Presently, the outgoing channel id is requested from the connector
-  // and not persisted to the store -- that's bad!
-
-  const plugin = new XrpAsymClient(
+  const plugin = new XrpPlugin(
     {
+      role: 'client',
       server,
-      currencyScale: 9,
-      secret,
       xrpServer,
-      autoFundChannel: false
+      xrpSecret: secret
     },
     {
       log: createLogger('ilp-plugin-xrp'),
@@ -157,148 +161,61 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     }
   )
 
-  /** Stream of updated properties on the underlying plugin */
-  const plugin$ = new Subject<{
-    readonly key: any
-    readonly val: any
-  }>()
+  const pluginAccount = await plugin._loadAccount('peer')
 
-  /** Trap all property updates on the plugin to emit them on observable */
-  const pluginProxy = new Proxy(plugin, {
-    set: (target, key, val) => {
-      plugin$.next({
-        key,
-        val
-      })
-      return Reflect.set(target, key, val)
-    }
-  })
-
-  /** Emit updates when the specific property is updated on the plugin */
-  const observeProp = <K>(key: K): Observable<any[K]> =>
-    plugin$.pipe(
-      filter(update => update.key === key),
-      map(({ val }) => val)
-    )
-
-  /** Operator on observable to extract the amount of the claim/channel */
-  const getValue = map<
-    FormattedPaymentChannel | PaymentChannelClaim | undefined,
-    BigNumber
-  >(channel => new BigNumber(channel ? channel.amount : 0))
-
-  /** Operator on observable to convert xrp base units to XRP */
   const toXrp = map<BigNumber, BigNumber>(amount =>
-    convert(xrpBase(amount), xrp())
+    convert(drop(amount), xrp())
   )
 
-  /** Operator on observable to limit by latest of another observable */
-
-  const outgoingChannelAmount$ = new BehaviorSubject(new BigNumber(0))
-  const outgoingClaimAmount$ = new BehaviorSubject(new BigNumber(0))
-  observeProp('_lastClaim')
-    .pipe(
-      getValue,
-      toXrp
-    )
-    .subscribe(outgoingClaimAmount$)
-
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingChannelAmount$, outgoingClaimAmount$)
+  fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
-      map(([channelAmount, claimAmount]) =>
-        BigNumber.min(channelAmount, claimAmount)
-      )
+      map(spentFromChannel),
+      toXrp
     )
     .subscribe(totalSent$)
 
   const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(outgoingChannelAmount$, totalSent$)
+  fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
-      map(([channelAmount, claimAmount]) => channelAmount.minus(claimAmount))
+      map(remainingInChannel),
+      toXrp
     )
     .subscribe(outgoingCapacity$)
 
-  const incomingChannelAmount$ = new BehaviorSubject(new BigNumber(0))
-  const incomingClaimAmount$ = new BehaviorSubject(new BigNumber(0))
-  observeProp('_bestClaim')
-    .pipe(
-      getValue,
-      toXrp
-    )
-    .subscribe(incomingClaimAmount$)
-
   const totalReceived$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(incomingChannelAmount$, incomingClaimAmount$)
+  fromEvent<ClaimablePaymentChannel | undefined>(
+    pluginAccount.account.incoming,
+    'data'
+  )
     .pipe(
-      map(([channelAmount, claimAmount]) =>
-        BigNumber.min(channelAmount, claimAmount)
-      )
+      map(spentFromChannel),
+      toXrp
     )
     .subscribe(totalReceived$)
 
   const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(incomingChannelAmount$, totalReceived$)
+  fromEvent<ClaimablePaymentChannel | undefined>(
+    pluginAccount.account.incoming,
+    'data'
+  )
     .pipe(
-      map(([channelAmount, claimAmount]) => channelAmount.minus(claimAmount))
+      map(remainingInChannel),
+      toXrp
     )
     .subscribe(incomingCapacity$)
-
-  // Load the intiial channel state
-  plugin.once('connect', async () => {
-    incomingChannelAmount$.next(await refreshIncomingChannel(state)(plugin))
-    outgoingChannelAmount$.next(await refreshOutgoingChannel(state)(plugin))
-  })
 
   return {
     settlerType: SettlementEngineType.XrpPaychan,
     credentialId: uniqueId(credential),
-    plugin: pluginProxy,
+    plugin,
+    pluginAccount,
     outgoingCapacity$,
     incomingCapacity$,
     totalSent$,
-    totalReceived$,
-    incomingChannelAmount$,
-    outgoingChannelAmount$
+    totalReceived$
   }
 }
-
-// TODO Capacity must be periodically refreshed if the CONNECTOR decides to deposit!
-
-const refreshIncomingChannel = (state: State) => async (
-  plugin: XrpAsymClient
-): Promise<BigNumber> =>
-  plugin._clientChannel
-    ? fetchChannelCapacity(state)(plugin._clientChannel)
-    : new BigNumber(0)
-
-const refreshOutgoingChannel = (state: State) => (plugin: XrpAsymClient) =>
-  plugin._channel
-    ? fetchChannelCapacity(state)(plugin._channel)
-    : new BigNumber(0)
-
-const fetchChannelCapacity = (state: State) => async (
-  channelId: string
-): Promise<BigNumber> => {
-  const { api } = state.settlers[SettlementEngineType.XrpPaychan]
-
-  // TODO Submit PR to ripple-lib to add amount to type!
-  const channel = ((await api.getPaymentChannel(channelId).catch(err => {
-    if (err.name === 'RippledError' && err.message === 'entryNotFound') {
-      return
-    }
-    log.error('Failed to fetch payment channel capacity: ', err)
-  })) as unknown) as (FormattedPaymentChannel | void)
-  return new BigNumber(channel ? channel.amount : 0)
-}
-
-// TODO Can I elimiante this? (Or use the abstracted version?)
-const getCredential = (state: State) => (credentialId: string) =>
-  state.credentials.filter(
-    (c): c is ValidatedXrpSecret =>
-      c.settlerType === SettlementEngineType.XrpPaychan &&
-      uniqueId(c) === credentialId
-  )[0]
 
 const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   amount,
@@ -307,71 +224,6 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   readonly amount: BigNumber
   readonly authorize: AuthorizeDeposit
 }) => {
-  const { api } = state.settlers[uplink.settlerType]
-  const { address } = getCredential(state)(uplink.credentialId)
-
-  // TODO Temporarily solve issue with deadlock due to insufficient outgoing
-  // (server won't fund incoming, even if more is deposited later)
-  if (convert(xrp(amount), usd(), state.rateBackend).isLessThan(0.6)) {
-    throw new Error('insufficient deposit amount')
-  }
-
-  // Confirm that the account has sufficient funds to cover the reserve
-  const { ownerCount, xrpBalance } = await api.getAccountInfo(address) // TODO May throw if the account isn't found
-  const {
-    validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
-  } = await api.getServerInfo()
-  const fee = convert(xrpBase(10), xrp()) // TODO Calculate this (plugin should accept fee param?)
-  const minBalance =
-    /* Minimum amount of XRP for every account to keep in reserve */
-    +reserveBaseXRP +
-    /** Current amount reserved in XRP for each object the account is responsible for */
-    +reserveIncrementXRP * ownerCount +
-    /** Additional reserve this channel requires, in XRP */
-    +reserveIncrementXRP +
-    /** Amount to fund the channel, in XRP */
-    +amount +
-    /** Assume channel creation fee of 10 drops (unclear) */
-    +fee
-  const currentBalance = +xrpBalance
-  if (currentBalance < minBalance) {
-    // TODO Return a specific type of error
-    throw new Error('insufficient funds')
-  }
-
-  // TODO Add accounting for fees from autoClaim and such!
-
-  // TODO If the fee is ~0 and the user already entered the amount, do they need to authorize it?
-  // TODO Should the promise reject if unauthorized?
-  await authorize({
-    value: amount /** XRP */,
-    fee /** XRP */
-  })
-
-  // Check if we need to create a new channel or deposit to an existing channel
-  // TODO Ensure the amount is rounded down, since there sometimes is more precision than -6 (also make sure the prompt is correct)
-  const requiresNewChannel = !uplink.plugin._channel
-  requiresNewChannel
-    ? await uplink.plugin._createOutgoingChannel(amount.toString())
-    : await uplink.plugin._fundOutgoingChannel(amount.toString())
-
-  // TODO Change this to perform the handshake whenever there's no incoming capacity
-  if (requiresNewChannel) {
-    await uplink.plugin._performConnectHandshake()
-  }
-
-  uplink.outgoingChannelAmount$.next(
-    await refreshOutgoingChannel(state)(uplink.plugin)
-  )
-
-  uplink.incomingChannelAmount$.next(
-    await refreshIncomingChannel(state)(uplink.plugin)
-  )
-}
-
-const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
-  authorize: AuthorizeWithdrawal
-) => {
   const { api } = state.settlers[uplink.settlerType]
   const readyCredential = state.credentials.find(
     isThatCredentialId<ValidatedXrpSecret>(
@@ -382,40 +234,72 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => (state: State) => async (
   if (!readyCredential) {
     return
   }
-  const { address, secret } = readyCredential
+  const { address } = readyCredential
 
-  // Prompt the user to authorize the withdrawal
-  // TODO Add actual fee calculation to the XRP plugins
-  const fee = convert(drop(10), xrp())
-  const value = uplink.outgoingCapacity$.value.plus(uplink.totalReceived$.value)
-  await authorize({ fee, value })
+  const fundAmountDrops = convert(xrp(amount), drop())
+  await uplink.pluginAccount.fundOutgoingChannel(fundAmountDrops, async fee => {
+    // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
 
-  // Submit latest claim and close the incoming channel
-  await uplink.plugin._autoClaim(true)
+    // Confirm that the account has sufficient funds to cover the reserve
+    // TODO May throw if the account isn't found
+    const { ownerCount, xrpBalance } = await api.getAccountInfo(address)
+    const {
+      validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
+    } = await api.getServerInfo()
+    const minBalance =
+      /* Minimum amount of XRP for every account to keep in reserve */
+      +reserveBaseXRP +
+      /** Current amount reserved in XRP for each object the account is responsible for */
+      +reserveIncrementXRP * ownerCount +
+      /** Additional reserve this channel requires, in units of XRP */
+      +reserveIncrementXRP +
+      /** Amount to fund the channel, in unit sof XRP */
+      +amount +
+      /** Assume channel creation fee from plugin, in units of XRP */
+      +fee
+    const currentBalance = +xrpBalance
+    if (currentBalance < minBalance) {
+      // TODO Return a specific type of error
+      throw new Error('insufficient funds')
+    }
 
-  /*
-   * Per https://github.com/interledgerjs/ilp-plugin-xrp-paychan-shared/pull/23,
-   * the TxSubmitter is a singleton per XRP address, so it will use an existing one
-   */
-  const submitter = createSubmitter(api, address, secret)
+    await authorize({
+      value: amount,
+      fee
+    })
+  })
 
-  const outgoingChannelId = uplink.plugin._channel
-  if (outgoingChannelId) {
-    await submitter
-      .submit('preparePaymentChannelClaim', {
-        channel: outgoingChannelId,
-        close: true
+  // Wait up to 1 minute for incoming capacity to be created
+  await uplink.incomingCapacity$
+    .pipe(
+      first(amount => amount.isGreaterThan(0)),
+      timeout(60000)
+    )
+    .toPromise()
+}
+
+const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
+  authorize: AuthorizeWithdrawal
+) => {
+  const claimChannel = uplink.pluginAccount.claimIfProfitable(
+    false,
+    async (channel, fee) => {
+      await authorize({
+        value: uplink.outgoingCapacity$.value.plus(
+          convert(drop(channel.spent), xrp())
+        ),
+        fee
       })
-      .catch((err: Error) => log.error('Failed to close channel: ', err))
-  }
-
-  // Ensure that the balances are updated to reflect the closed channels
-  uplink.incomingChannelAmount$.next(
-    await refreshIncomingChannel(state)(uplink.plugin)
+    }
   )
 
-  // TODO This is kinda a hack, because we must wait up to 5 minutes for xrp-asym-server watcher to claim
-  uplink.outgoingChannelAmount$.next(new BigNumber(0))
+  // TODO This won't reject if the withdraw fails!
+  const requestClose = uplink.pluginAccount.requestClose()
+
+  // Simultaneously withdraw and request incoming capacity to be removed
+  await Promise.all([claimChannel, requestClose])
+
+  // TODO Confirm the incoming capacity has been closed -- or attempt to dispute it?
 }
 
 /**
