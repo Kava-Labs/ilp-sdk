@@ -17,9 +17,6 @@ test.beforeEach(async t => {
   // Delete any existing config
   await promisify(unlink)(CONFIG_PATH).catch(() => Promise.resolve())
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
-
-  // TODO Partially apply addEth, addXrp, addBtc here?
-  // TODO Partially apply createFunded uplink?
 })
 
 // TODO Turn this into a generic helper
@@ -43,10 +40,14 @@ export const testExchange = (
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
 
-  const sourceUnit = state.settlers[sourceUplink.settlerType].exchangeUnit
-  const destUnit = state.settlers[destUplink.settlerType].exchangeUnit
+  const sourceSettler = state.settlers[sourceUplink.settlerType]
+  const destSettler = state.settlers[destUplink.settlerType]
 
-  const amountToSend = convert(usd(2), sourceUnit(), state.rateBackend)
+  const amountToSend = convert(
+    usd(2),
+    sourceSettler.exchangeUnit(),
+    state.rateBackend
+  ).decimalPlaces(sourceSettler.assetScale)
   const start = performance.now()
   await t.notThrowsAsync(
     streamMoney({
@@ -68,8 +69,8 @@ export const testExchange = (
   )
 
   const estimatedReceiveAmount = convert(
-    sourceUnit(amountToSend),
-    destUnit(),
+    sourceSettler.exchangeUnit(amountToSend),
+    destSettler.exchangeUnit(),
     state.rateBackend
   )
   const estimatedDestFinalBalance = initialDestBalance.plus(

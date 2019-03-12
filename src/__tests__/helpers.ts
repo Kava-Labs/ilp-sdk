@@ -3,6 +3,7 @@ import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import { ReadyUplinks, SettlementEngineType, SwitchApi } from '..'
 import { AuthorizeDeposit, AuthorizeWithdrawal } from '../uplink'
 
+
 export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Machinomy,
@@ -29,13 +30,18 @@ export const createFundedUplink = (api: SwitchApi) => async (
 ) => {
   const uplink = await createUplink(api)
 
+  const amount = convert(
+    usd(3),
+    api.state.settlers[uplink.settlerType].exchangeUnit(),
+    api.state.rateBackend
+  ).decimalPlaces(
+    api.state.settlers[uplink.settlerType].assetScale,
+    BigNumber.ROUND_DOWN
+  )
+
   await api.deposit({
     uplink,
-    amount: convert(
-      usd(3),
-      api.state.settlers[uplink.settlerType].exchangeUnit(),
-      api.state.rateBackend
-    ),
+    amount,
     authorize: () => Promise.resolve()
   })
 

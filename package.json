@@ -46,8 +46,8 @@
   },
   "homepage": "https://github.com/Kava-Labs/switch-api#readme",
   "dependencies": {
-    "@kava-labs/crypto-rate-utils": "^2.0.2",
-    "@kava-labs/ilp-plugin-xrp-asym-client": "^1.7.1",
+    "@kava-labs/crypto-rate-utils": "^3.0.0",
+    "@kava-labs/ilp-plugin-xrp-paychan": "^0.2.2",
     "argon2": "^0.20.1",
     "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
@@ -56,7 +56,6 @@
     "ilp-packet": "^3.0.8",
     "ilp-plugin-ethereum": "^3.0.0-beta.14",
     "ilp-plugin-lightning": "^1.0.0-beta.21",
-    "ilp-plugin-xrp-paychan-shared": "^4.1.3",
     "ilp-protocol-ildcp": "^2.0.1",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#3fe1f02273c8ac60927d902c7a88c45111c5699b",
     "oer-utils": "^4.0.0",

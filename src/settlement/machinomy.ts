@@ -251,7 +251,7 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
     .toPromise()
 }
 
-const withdraw = (uplink: ReadyMachinomyUplink) => (state: State) => async (
+const withdraw = (uplink: ReadyMachinomyUplink) => async (
   authorize: AuthorizeWithdrawal
 ) => {
   const claimChannel = uplink.pluginAccount.claimIfProfitable(
