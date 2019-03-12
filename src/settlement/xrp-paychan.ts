@@ -124,19 +124,19 @@ export const configFromXrpCredential = ({
   ...cred
 }: ValidatedXrpSecret): UnvalidatedXrpSecret => cred
 
+export const getBaseBalance = async (
+  settler: XrpPaychanSettlementEngine,
+  credential: ValidatedXrpSecret
+) => {
+  const response = await settler.api.getAccountInfo(credential.address)
+  return new BigNumber(response.xrpBalance)
+}
+
 /**
  * ------------------------------------
  * UPLINK
  * ------------------------------------
  */
-
-// // Estimate all ripple tx fees as a high fixed value as a temporary solution.
-// // Problems:
-// //  - plugins do not allow us to set the fee for txs
-// //  - plugins do not allow authorization of every tx (so account balance can be spent in the background, making exact balance checks impossible)
-// // Current solution is to over estimate fees so that in practice the amount spent will always be lower that estimated.
-// // The default tx fee for ripple api is 12 drops for a normal tx. (base fee of 10 drops x feeCushion of 1.2 (https://developers.ripple.com/rippleapi-reference.html))
-// const ESTIMATED_XRP_TX_FEE = convert(drop(50), xrp())
 
 export interface XrpPaychanBaseUplink extends BaseUplink {
   readonly settlerType: SettlementEngineType.XrpPaychan

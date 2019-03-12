@@ -3,7 +3,6 @@ import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import { ReadyUplinks, SettlementEngineType, SwitchApi } from '..'
 import { AuthorizeDeposit, AuthorizeWithdrawal } from '../uplink'
 
-
 export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Machinomy,
