@@ -48,7 +48,7 @@ export const testFunding = (
   // TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
-  const baseBalance1 = await getBaseBalance(uplink)
+  const baseBalance1 = await getBaseBalance(uplink) as BigNumber // TODO deal with types properly
   const openAmount = toUplinkUnit(usd(1))
   const valueAndFee1 = await depositAndCapture({
     uplink,
@@ -59,7 +59,7 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
-  const baseBalance2 = await getBaseBalance(uplink)
+  const baseBalance2 = await getBaseBalance(uplink) as BigNumber
   t.true(
     baseBalance1.minus(baseBalance2).isGreaterThanOrEqualTo(openAmount),
     'amount spent is ≥ the deposit amount'
@@ -90,7 +90,7 @@ export const testFunding = (
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
-  const baseBalance3 = await getBaseBalance(uplink)
+  const baseBalance3 = await getBaseBalance(uplink) as BigNumber
   t.true(
     baseBalance2.minus(baseBalance3).isGreaterThanOrEqualTo(depositAmount),
     'amount spent is ≥ the deposit amount'
@@ -125,7 +125,7 @@ export const testFunding = (
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
-  const baseBalance4 = await getBaseBalance(uplink)
+  const baseBalance4 = await getBaseBalance(uplink) as BigNumber
   t.true(
     baseBalance4.minus(baseBalance3).isLessThanOrEqualTo(withdrawAmount),
     'did not get back more money than was withdrawn'
