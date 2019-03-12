@@ -23,7 +23,7 @@ test.afterEach(async t => {
 const testWithdrawWithoutDeposit = (
   createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<SwitchApi>) => {
-  const uplink = await createFundedUplink(t.context)(createUplink)
+  const uplink = await createUplink(t.context)
 
   await t.notThrowsAsync(
     t.context.withdraw({ uplink, authorize: () => Promise.resolve() })
