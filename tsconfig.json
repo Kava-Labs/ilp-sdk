@@ -9,31 +9,15 @@
     "declaration": true,
     "sourceMap": true,
     "esModuleInterop": true,
-
     "strict": true /* Enable all strict type-checking options. */,
-    // "strictFunctionTypes": false, // TODO Should I disable
-
     "resolveJsonModule": true /* Required by Ethereum plugin for loading ABIs. */,
-
-    /* Debugging Options */
     "preserveWatchOutput": true /* Don't clear console in watch mode. */,
     "traceResolution": false /* Report module resolution log messages. */,
     "listEmittedFiles": false /* Print names of generated files part of the compilation. */,
     "listFiles": false /* Print names of files part of the compilation. */,
     "pretty": true /* Stylize errors and messages using color and context. */,
-    // "paths": {
-    //   "@/*": ["./*"],
-    //   "@ledgers/*": ["./ledgers/*"],
-    //   "@test/*": ["./__tests__/*"]
-    // }
     "typeRoots": ["node_modules/@types", "src/types"],
     "paths": {
-      "@kava-labs/ilp-plugin-xrp-asym-client": [
-        "./types/ilp-plugin-xrp-asym-client"
-      ],
-      "ilp-plugin-xrp-paychan-shared": [
-        "./types/ilp-plugin-xrp-paychan-shared"
-      ],
       "ripple-keypairs": ["./types/ripple-keypairs"]
     }
   }
