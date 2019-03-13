@@ -1,21 +1,16 @@
-import { convert, drop, xrp, usd } from '@kava-labs/crypto-rate-utils'
+import { convert, drop, xrp } from '@kava-labs/crypto-rate-utils'
 import XrpPlugin, {
-  XrpAccount,
+  ClaimablePaymentChannel,
+  PaymentChannel,
   remainingInChannel,
   spentFromChannel,
-  PaymentChannel,
-  ClaimablePaymentChannel
+  XrpAccount
 } from '@kava-labs/ilp-plugin-xrp-paychan'
+import BigNumber from 'bignumber.js'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
-import { FormattedPaymentChannel, RippleAPI } from 'ripple-lib'
-import {
-  BehaviorSubject,
-  combineLatest,
-  Observable,
-  Subject,
-  fromEvent
-} from 'rxjs'
-import { filter, map, first, timeout } from 'rxjs/operators'
+import { RippleAPI } from 'ripple-lib'
+import { BehaviorSubject, fromEvent } from 'rxjs'
+import { first, map, timeout } from 'rxjs/operators'
 import { Flavor } from 'types/util'
 import { LedgerEnv, State } from '..'
 import { isThatCredentialId } from '../credential'
@@ -29,7 +24,6 @@ import {
 } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
-import BigNumber from 'bignumber.js'
 
 const log = createLogger('switch-api:xrp-paychan')
 
@@ -167,7 +161,9 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     convert(drop(amount), xrp())
   )
 
-  const totalSent$ = new BehaviorSubject(new BigNumber(0))
+  const totalSent$ = new BehaviorSubject(
+    spentFromChannel(pluginAccount.account.outgoing.state)
+  )
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(spentFromChannel),
@@ -175,7 +171,9 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     )
     .subscribe(totalSent$)
 
-  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  const outgoingCapacity$ = new BehaviorSubject(
+    remainingInChannel(pluginAccount.account.outgoing.state)
+  )
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(remainingInChannel),
@@ -183,7 +181,9 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     )
     .subscribe(outgoingCapacity$)
 
-  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
+  const totalReceived$ = new BehaviorSubject(
+    spentFromChannel(pluginAccount.account.incoming.state)
+  )
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
@@ -194,7 +194,9 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     )
     .subscribe(totalReceived$)
 
-  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  const incomingCapacity$ = new BehaviorSubject(
+    remainingInChannel(pluginAccount.account.incoming.state)
+  )
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
