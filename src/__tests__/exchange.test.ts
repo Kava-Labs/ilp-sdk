@@ -35,7 +35,7 @@ export const testExchange = (
   ])
 
   // TODO Without this pause, Lnd -> Lnd will fail
-  await new Promise(r => setTimeout(r, 2000))
+  await new Promise(r => setTimeout(r, 3000))
 
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
