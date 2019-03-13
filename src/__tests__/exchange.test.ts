@@ -35,7 +35,7 @@ export const testExchange = (
   ])
 
   // TODO Without this pause, Lnd -> Lnd will fail
-  await new Promise(r => setTimeout(r, 500))
+  await new Promise(r => setTimeout(r, 3000))
 
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
@@ -58,8 +58,7 @@ export const testExchange = (
   )
   t.log(`time: ${performance.now() - start} ms`)
 
-  // Wait up to 2 seconds for the final settlements to come in
-  // TODO Fix this
+  // TODO Wait up to 2 seconds for the final settlements to come in
   await new Promise(r => setTimeout(r, 2000))
 
   const finalSourceBalance = sourceUplink.balance$.value

@@ -20,12 +20,7 @@ import { URL } from 'url'
 import { LedgerEnv, State } from '..'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import { Flavor } from '../types/util'
-import {
-  BaseUplink,
-  BaseUplinkConfig,
-  getNativeMaxInFlight,
-  ReadyUplink
-} from '../uplink'
+import { BaseUplink, BaseUplinkConfig, ReadyUplink } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
 
@@ -192,13 +187,6 @@ const connectUplink = (credential: ReadyLndCredential) => (
   const server = config.plugin.btp.serverUri
   const store = config.plugin.store
 
-  // TODO Remove this?
-  // TODO Remove balance from lightning plugin?
-  const maxInFlight = await getNativeMaxInFlight(
-    state,
-    SettlementEngineType.Lnd
-  )
-
   const plugin = new LightningPlugin(
     {
       role: 'client',
@@ -209,14 +197,7 @@ const connectUplink = (credential: ReadyLndCredential) => (
        */
       lnd: credential.service,
       paymentStream: credential.paymentStream,
-      invoiceStream: credential.invoiceStream,
-      // TODO Remove balance
-      maxPacketAmount: maxInFlight.toString(),
-      balance: {
-        maximum: maxInFlight.times(2).toString(),
-        settleTo: maxInFlight.toString(),
-        settleThreshold: maxInFlight.toString() // TODO Hack for now to always attempt to settle (limited by payout amount)
-      }
+      invoiceStream: credential.invoiceStream
     },
     {
       log: createLogger('ilp-plugin-lightning'),
