@@ -283,7 +283,7 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
 const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
   authorize: AuthorizeWithdrawal
 ) => {
-  const claimChannel = uplink.pluginAccount.claimIfProfitable(
+  const claimChannel = uplink.pluginAccount.claimChannel(
     false,
     async (channel, fee) => {
       await authorize({
