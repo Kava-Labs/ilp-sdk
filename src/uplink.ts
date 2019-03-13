@@ -255,7 +255,7 @@ export const connectUplink = (state: State) => (
   )
 
   // Accept incoming payments
-  // TODO For now, this won't work, because there's no balance logic the stream plugin being used
+  // TODO For now, this won't work, because the original non-wrapper plugin won't auto settle
   const registerServerHandler = (handler: DataHandler) => {
     handlers.streamServerHandler = handler
   }
