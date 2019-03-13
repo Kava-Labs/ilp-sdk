@@ -35,7 +35,7 @@ export const testExchange = (
   ])
 
   // TODO Without this pause, Lnd -> Lnd will fail
-  await new Promise(r => setTimeout(r, 500))
+  await new Promise(r => setTimeout(r, 2000))
 
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
@@ -58,8 +58,7 @@ export const testExchange = (
   )
   t.log(`time: ${performance.now() - start} ms`)
 
-  // Wait up to 2 seconds for the final settlements to come in
-  // TODO Fix this
+  // TODO Wait up to 2 seconds for the final settlements to come in
   await new Promise(r => setTimeout(r, 2000))
 
   const finalSourceBalance = sourceUplink.balance$.value
@@ -92,4 +91,4 @@ test('eth -> btc', testExchange(addEth(), addBtc()))
 test('eth -> xrp', testExchange(addEth(), addXrp()))
 test('xrp -> xrp', testExchange(addXrp(), addXrp(2)))
 test('eth -> eth', testExchange(addEth(), addEth(2)))
-test('btc -> btc', testExchange(addBtc(), addBtc(2)))
+test.only('btc -> btc', testExchange(addBtc(), addBtc(2)))
