@@ -163,7 +163,9 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
 
   const toEth = map<BigNumber, BigNumber>(amount => convert(wei(amount), eth()))
 
-  const totalSent$ = new BehaviorSubject(new BigNumber(0))
+  const totalSent$ = new BehaviorSubject(
+    spentFromChannel(pluginAccount.account.outgoing.state)
+  )
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(spentFromChannel),
@@ -171,7 +173,9 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     )
     .subscribe(totalSent$)
 
-  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  const outgoingCapacity$ = new BehaviorSubject(
+    remainingInChannel(pluginAccount.account.outgoing.state)
+  )
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       map(remainingInChannel),
@@ -179,7 +183,9 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     )
     .subscribe(outgoingCapacity$)
 
-  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
+  const totalReceived$ = new BehaviorSubject(
+    spentFromChannel(pluginAccount.account.incoming.state)
+  )
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
@@ -190,7 +196,9 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     )
     .subscribe(totalReceived$)
 
-  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
+  const incomingCapacity$ = new BehaviorSubject(
+    remainingInChannel(pluginAccount.account.incoming.state)
+  )
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
