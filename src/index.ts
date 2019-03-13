@@ -65,6 +65,8 @@ export interface State {
   uplinks: ReadyUplinks[]
 }
 
+export { CONFIG_PATH } from './config'
+
 export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
   const [fileDescriptor, config] = await loadConfig()
 
