@@ -23,7 +23,7 @@ import { SettlementEngine, SettlementEngineType } from '../engine'
 import { fetchGasPrice } from './shared/eth'
 import { LedgerEnv, State } from '..'
 import { BehaviorSubject, fromEvent } from 'rxjs'
-import { map, timeout, first } from 'rxjs/operators'
+import { map, timeout, first, startWith } from 'rxjs/operators'
 
 /**
  * ------------------------------------
@@ -163,47 +163,43 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
 
   const toEth = map<BigNumber, BigNumber>(amount => convert(wei(amount), eth()))
 
-  const totalSent$ = new BehaviorSubject(
-    spentFromChannel(pluginAccount.account.outgoing.state)
-  )
+  const totalSent$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
+      startWith(pluginAccount.account.outgoing.state),
       map(spentFromChannel),
       toEth
     )
     .subscribe(totalSent$)
 
-  const outgoingCapacity$ = new BehaviorSubject(
-    remainingInChannel(pluginAccount.account.outgoing.state)
-  )
+  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
+      startWith(pluginAccount.account.outgoing.state),
       map(remainingInChannel),
       toEth
     )
     .subscribe(outgoingCapacity$)
 
-  const totalReceived$ = new BehaviorSubject(
-    spentFromChannel(pluginAccount.account.incoming.state)
-  )
+  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
   )
     .pipe(
+      startWith(pluginAccount.account.incoming.state),
       map(spentFromChannel),
       toEth
     )
     .subscribe(totalReceived$)
 
-  const incomingCapacity$ = new BehaviorSubject(
-    remainingInChannel(pluginAccount.account.incoming.state)
-  )
+  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
   )
     .pipe(
+      startWith(pluginAccount.account.incoming.state),
       map(remainingInChannel),
       toEth
     )

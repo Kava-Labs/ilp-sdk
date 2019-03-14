@@ -10,7 +10,7 @@ import BigNumber from 'bignumber.js'
 import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
 import { BehaviorSubject, fromEvent } from 'rxjs'
-import { first, map, timeout } from 'rxjs/operators'
+import { first, map, timeout, startWith } from 'rxjs/operators'
 import { Flavor } from 'types/util'
 import { LedgerEnv, State } from '..'
 import { isThatCredentialId } from '../credential'
@@ -161,47 +161,43 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
     convert(drop(amount), xrp())
   )
 
-  const totalSent$ = new BehaviorSubject(
-    spentFromChannel(pluginAccount.account.outgoing.state)
-  )
+  const totalSent$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
+      startWith(pluginAccount.account.outgoing.state),
       map(spentFromChannel),
       toXrp
     )
     .subscribe(totalSent$)
 
-  const outgoingCapacity$ = new BehaviorSubject(
-    remainingInChannel(pluginAccount.account.outgoing.state)
-  )
+  const outgoingCapacity$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
+      startWith(pluginAccount.account.outgoing.state),
       map(remainingInChannel),
       toXrp
     )
     .subscribe(outgoingCapacity$)
 
-  const totalReceived$ = new BehaviorSubject(
-    spentFromChannel(pluginAccount.account.incoming.state)
-  )
+  const totalReceived$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
   )
     .pipe(
+      startWith(pluginAccount.account.incoming.state),
       map(spentFromChannel),
       toXrp
     )
     .subscribe(totalReceived$)
 
-  const incomingCapacity$ = new BehaviorSubject(
-    remainingInChannel(pluginAccount.account.incoming.state)
-  )
+  const incomingCapacity$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<ClaimablePaymentChannel | undefined>(
     pluginAccount.account.incoming,
     'data'
   )
     .pipe(
+      startWith(pluginAccount.account.incoming.state),
       map(remainingInChannel),
       toXrp
     )
