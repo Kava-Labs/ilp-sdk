@@ -1,6 +1,7 @@
 import { SwitchApi, SettlementEngineType, ReadyUplinks } from '..'
 import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
+import { AuthorizeDeposit, AuthorizeWithdrawal } from '../uplink'
 
 export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
   add({
