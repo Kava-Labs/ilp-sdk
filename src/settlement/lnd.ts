@@ -222,9 +222,7 @@ const connectUplink = (credential: ReadyLndCredential) => (
   }
 }
 
-export const getBaseBalance = async (
-  credential: ReadyLndCredential
-) => {
+export const getBaseBalance = async (credential: ReadyLndCredential) => {
   const lndService = credential.service
   const baseBalance = await lndService.walletBalance(new WalletBalanceRequest())
   return new BigNumber(baseBalance.getConfirmedBalance())
