@@ -18,7 +18,7 @@ import { ReadyCredentials, getCredential, getCredentialId } from './credential'
 import { SettlementEngine, SettlementEngineType } from './engine'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
-import { Lnd, LndBaseUplink } from './settlement/lnd'
+import { Lnd, LndBaseUplink, LndSettlementEngine } from './settlement/lnd'
 import {
   XrpPaychan,
   XrpPaychanBaseUplink,
@@ -480,7 +480,7 @@ export const getBaseBalance = (state: State) => async (
 
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
-      return
+      return Lnd.getBaseBalance(credential)
     case SettlementEngineType.Machinomy:
       return Machinomy.getBaseBalance(
         settler as MachinomySettlementEngine,
