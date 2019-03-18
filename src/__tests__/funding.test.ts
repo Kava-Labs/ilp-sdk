@@ -65,10 +65,10 @@ export const testFunding = (
     'amount spent is ≥ the deposit amount'
   )
   t.true(
-    baseBalance1
-      .minus(baseBalance2)
-      .isLessThanOrEqualTo(openAmount.plus(valueAndFee1.fee)),
-    'amount spent is ≤ reported fee + deposit amount'
+    initialBaseBalance
+      .minus(baseBalanceAfterOpen)
+      .isEqualTo(openAmount.plus(channelOpenValueAndFee.fee)),
+    'after channel open, base balance is reduced by exactly the reported fee + open amount'
   )
   t.true(
     openAmount.isEqualTo(valueAndFee1.value),
@@ -96,10 +96,10 @@ export const testFunding = (
     'amount spent is ≥ the deposit amount'
   )
   t.true(
-    baseBalance2
-      .minus(baseBalance3)
-      .isLessThanOrEqualTo(depositAmount.plus(valueAndFee2.fee)),
-    'amount spent is ≤ reported fee + deposit amount'
+    baseBalanceAfterOpen
+      .minus(baseBalanceAfterDeposit)
+      .isEqualTo(depositAmount.plus(depositValueAndFee.fee)),
+    'after deposit, base balance is reduced by exactly the reported fee + deposit amount'
   )
   t.true(
     depositAmount.isEqualTo(valueAndFee2.value),
