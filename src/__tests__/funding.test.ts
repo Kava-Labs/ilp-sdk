@@ -5,7 +5,7 @@ import { unlink } from 'fs'
 import { promisify } from 'util'
 import { connect, LedgerEnv, ReadyUplinks, SwitchApi } from '..'
 import { CONFIG_PATH } from '../config'
-import { addEth, addXrp, addBtc, captureFeesFrom } from './helpers'
+import { addEth, addXrp, captureFeesFrom } from './helpers'
 require('envkey')
 
 const test = anyTest as TestInterface<SwitchApi>
