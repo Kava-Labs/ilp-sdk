@@ -48,20 +48,14 @@ export const createFundedUplink = (api: SwitchApi) => async (
 }
 
 // Helper that runs deposit/withdraw, capturing and returning the reported tx value and fees.
-export const captureFeesFrom = (apiMethod: any) => async (params: {
-  readonly uplink: ReadyUplinks
-  readonly amount?: BigNumber
-}) => {
-  const reportedValueAndFee = { value: new BigNumber(0), fee: new BigNumber(0) }
+export const captureFeesFrom = async (
+  apiMethod: (authorize: AuthorizeDeposit | AuthorizeWithdrawal) => Promise<any>
+) => {
+  /* tslint:disable-next-line:no-let */
+  let reportedValueAndFee = { value: new BigNumber(0), fee: new BigNumber(0) }
 
-  const authorize: AuthorizeDeposit | AuthorizeWithdrawal = async params => {
-    reportedValueAndFee.value = params.value
-    reportedValueAndFee.fee = params.fee
-  }
-
-  await apiMethod({
-    ...params,
-    authorize: authorize
+  await apiMethod(async valueAndFee => {
+    reportedValueAndFee = valueAndFee
   })
 
   return reportedValueAndFee
