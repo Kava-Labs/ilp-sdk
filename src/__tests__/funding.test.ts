@@ -38,8 +38,10 @@ export const testFunding = (
       BigNumber.ROUND_DOWN
     )
   // capture reported fee from deposit and withdraw functions
-  const depositAndCapture = captureFeesFrom(deposit)
-  const withdrawAndCapture = captureFeesFrom(withdraw)
+  const depositAndCapture = (amount: BigNumber) =>
+    captureFeesFrom(authorize => deposit({ uplink, amount, authorize }))
+  const withdrawAndCapture = () =>
+    captureFeesFrom(authorize => withdraw({ uplink, authorize }))
 
   // TEST DEPOSIT (CHANNEL OPEN) ---------------------
 
@@ -48,21 +50,20 @@ export const testFunding = (
   // TODO Issue with xrp: openAmount has 9 digits of precision, but balance$ only has 6!
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
-  const baseBalance1 = await getBaseBalance(uplink)
+  const initialBaseBalance = await getBaseBalance(uplink)
   const openAmount = toUplinkUnit(usd(1))
-  const valueAndFee1 = await depositAndCapture({
-    uplink,
-    amount: openAmount
-  })
+  const channelOpenValueAndFee = await depositAndCapture(openAmount)
 
   t.true(
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
-  const baseBalance2 = await getBaseBalance(uplink)
+  const baseBalanceAfterOpen = await getBaseBalance(uplink)
   t.true(
-    baseBalance1.minus(baseBalance2).isGreaterThanOrEqualTo(openAmount),
-    'amount spent is ≥ the deposit amount'
+    initialBaseBalance
+      .minus(baseBalanceAfterOpen)
+      .isGreaterThanOrEqualTo(openAmount),
+    'after channel open, base balance is reduced by at least the open amount'
   )
   t.true(
     initialBaseBalance
@@ -71,8 +72,8 @@ export const testFunding = (
     'after channel open, base balance is reduced by exactly the reported fee + open amount'
   )
   t.true(
-    openAmount.isEqualTo(valueAndFee1.value),
-    'authorize reports correct value'
+    openAmount.isEqualTo(channelOpenValueAndFee.value),
+    'authorize reports correct value for open amount'
   )
   t.true(
     uplink.incomingCapacity$.value.isGreaterThan(new BigNumber(0)),
@@ -82,18 +83,17 @@ export const testFunding = (
   // TEST DEPOSIT (TOP UP) ----------------------------
 
   const depositAmount = toUplinkUnit(usd(2))
-  const valueAndFee2 = await depositAndCapture({
-    uplink,
-    amount: depositAmount
-  })
+  const depositValueAndFee = await depositAndCapture(depositAmount)
   t.true(
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
-  const baseBalance3 = await getBaseBalance(uplink)
+  const baseBalanceAfterDeposit = await getBaseBalance(uplink)
   t.true(
-    baseBalance2.minus(baseBalance3).isGreaterThanOrEqualTo(depositAmount),
-    'amount spent is ≥ the deposit amount'
+    baseBalanceAfterOpen
+      .minus(baseBalanceAfterDeposit)
+      .isGreaterThanOrEqualTo(depositAmount),
+    'after deposit, base balance is reduced by at least the deposit amount'
   )
   t.true(
     baseBalanceAfterOpen
@@ -102,8 +102,8 @@ export const testFunding = (
     'after deposit, base balance is reduced by exactly the reported fee + deposit amount'
   )
   t.true(
-    depositAmount.isEqualTo(valueAndFee2.value),
-    'authorize reports correct value'
+    depositAmount.isEqualTo(depositValueAndFee.value),
+    'authorize reports correct value for deposit amount'
   )
 
   // TEST WITHDRAW ----------------------------------------
@@ -119,25 +119,27 @@ export const testFunding = (
   )
 
   const withdrawAmount = uplink.balance$.value
-  const valueAndFee3 = await withdrawAndCapture({ uplink })
+  const withdrawValueAndFee = await withdrawAndCapture()
 
   t.true(
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
-  const baseBalance4 = await getBaseBalance(uplink)
+  const baseBalanceAfterWithdraw = await getBaseBalance(uplink)
   t.true(
-    baseBalance4.minus(baseBalance3).isLessThanOrEqualTo(withdrawAmount),
-    'did not get back more money than was withdrawn'
+    baseBalanceAfterWithdraw
+      .minus(baseBalanceAfterDeposit)
+      .isLessThanOrEqualTo(withdrawAmount),
+    'after withdraw, base balance is increased by up to withdraw amount'
   )
   t.true(
-    baseBalance4
-      .minus(baseBalance3)
-      .isGreaterThanOrEqualTo(withdrawAmount.minus(valueAndFee3.fee)),
-    'did not get back less money than was expected'
+    baseBalanceAfterWithdraw
+      .minus(baseBalanceAfterDeposit)
+      .isGreaterThanOrEqualTo(withdrawAmount.minus(withdrawValueAndFee.fee)),
+    'after withdraw, base balance is increased by at least the withdraw amount minus reported fee'
   )
   t.true(
-    withdrawAmount.isEqualTo(valueAndFee3.value),
+    withdrawAmount.isEqualTo(withdrawValueAndFee.value),
     'authorize reports correct value'
   )
 }
