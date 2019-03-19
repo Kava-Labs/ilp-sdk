@@ -14,17 +14,29 @@ import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
-import { startStreamServer, stopStreamServer } from './services/stream-server'
+import { ReadyCredentials, getCredential, getCredentialId } from './credential'
 import { SettlementEngine, SettlementEngineType } from './engine'
-import { LndBaseUplink, Lnd } from './settlement/lnd'
-import { XrpPaychanBaseUplink, XrpPaychan } from './settlement/xrp-paychan'
+import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
+import { Lnd, LndBaseUplink, LndSettlementEngine } from './settlement/lnd'
+import {
+  XrpPaychan,
+  XrpPaychanBaseUplink,
+  XrpPaychanSettlementEngine,
+  ValidatedXrpSecret,
+  ReadyXrpPaychanUplink
+} from './settlement/xrp-paychan'
+import {
+  Machinomy,
+  MachinomyBaseUplink,
+  MachinomySettlementEngine,
+  ReadyEthereumCredential,
+  ReadyMachinomyUplink
+} from './settlement/machinomy'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
-import { ReadyCredentials, getCredentialId } from './credential'
 import { generateSecret, generateToken } from './utils/crypto'
-import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
 
 const log = createLogger('switch-api:uplink')
 
@@ -453,6 +465,28 @@ export const closeUplink = async (uplink: ReadyUplinks) => {
     log.error('Error stopping Stream server: ', err)
   )
   return uplink.plugin.disconnect()
+}
+
+/**
+ * ------------------------------------
+ * BASE LAYER BALANCE
+ * ------------------------------------
+ */
+export const getBaseBalance = (state: State) => async (
+  uplink: ReadyUplinks
+) => {
+  const credential = getCredential(state)(uplink.credentialId)!
+
+  switch (credential.settlerType) {
+    case SettlementEngineType.Lnd:
+      return Lnd.getBaseBalance(credential)
+    case SettlementEngineType.Machinomy:
+      const machinomySettler = state.settlers[credential.settlerType]
+      return Machinomy.getBaseBalance(machinomySettler, credential)
+    case SettlementEngineType.XrpPaychan:
+      const xrpSettler = state.settlers[credential.settlerType]
+      return XrpPaychan.getBaseBalance(xrpSettler, credential)
+  }
 }
 
 /**

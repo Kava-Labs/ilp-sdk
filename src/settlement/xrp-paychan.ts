@@ -118,6 +118,14 @@ export const configFromXrpCredential = ({
   ...cred
 }: ValidatedXrpSecret): UnvalidatedXrpSecret => cred
 
+export const getBaseBalance = async (
+  settler: XrpPaychanSettlementEngine,
+  credential: ValidatedXrpSecret
+) => {
+  const response = await settler.api.getAccountInfo(credential.address)
+  return new BigNumber(response.xrpBalance)
+}
+
 /**
  * ------------------------------------
  * UPLINK
@@ -312,5 +320,6 @@ export const XrpPaychan = {
   uniqueId,
   connectUplink,
   deposit,
-  withdraw
+  withdraw,
+  getBaseBalance
 }

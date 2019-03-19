@@ -31,7 +31,8 @@ import {
   isThatUplink,
   ReadyUplinks,
   withdrawFromUplink,
-  connectUplink
+  connectUplink,
+  getBaseBalance
 } from './uplink'
 import { loadConfig, persistConfig } from './config'
 import { close } from 'fs'
@@ -189,6 +190,7 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
     withdraw,
     remove,
     streamMoney: streamMoney(state),
+    getBaseBalance: getBaseBalance(state),
     disconnect
   }
 }

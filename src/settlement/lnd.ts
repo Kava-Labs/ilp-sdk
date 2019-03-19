@@ -12,6 +12,7 @@ import LightningPlugin, {
   LndService,
   PaymentStream,
   SendResponse,
+  WalletBalanceRequest,
   waitForReady
 } from 'ilp-plugin-lightning'
 import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
@@ -221,6 +222,15 @@ const connectUplink = (credential: ReadyLndCredential) => (
   }
 }
 
+export const getBaseBalance = async (credential: ReadyLndCredential) => {
+  const lndService = credential.service
+  const baseBalance = await lndService.walletBalance(new WalletBalanceRequest())
+  return convert(
+    satoshi(new BigNumber(baseBalance.getConfirmedBalance())),
+    btc()
+  )
+}
+
 /**
  * ------------------------------------
  * SETTLEMENT MODULE
@@ -232,5 +242,6 @@ export const Lnd = {
   setupCredential,
   uniqueId,
   closeCredential,
-  connectUplink
+  connectUplink,
+  getBaseBalance
 }

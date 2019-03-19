@@ -113,6 +113,18 @@ export const configFromEthereumCredential = ({
   ...config
 }: ReadyEthereumCredential): ValidatedEthereumPrivateKey => config
 
+export const getBaseBalance = async (
+  settler: MachinomySettlementEngine,
+  credential: ReadyEthereumCredential
+) => {
+  const web3 = new Web3(settler.ethereumProvider)
+  const balanceWei = new BigNumber(
+    (await web3.eth.getBalance(credential.address)).toString()
+  )
+
+  return convert(wei(balanceWei), eth())
+}
+
 /**
  * ------------------------------------
  * UPLINK
@@ -217,18 +229,6 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   }
 }
 
-export const baseLayerBalance = async (
-  settler: MachinomySettlementEngine,
-  credential: ReadyEthereumCredential
-) => {
-  const web3 = new Web3(settler.ethereumProvider)
-  const balanceWei = new BigNumber(
-    (await web3.eth.getBalance(credential.address)).toString()
-  )
-
-  return convert(wei(balanceWei), eth())
-}
-
 export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
   amount,
   authorize
@@ -291,5 +291,6 @@ export const Machinomy = {
   uniqueId,
   connectUplink,
   deposit,
-  withdraw
+  withdraw,
+  getBaseBalance
 }
