@@ -140,7 +140,7 @@ export const testFunding = (
   )
   t.true(
     withdrawAmount.isEqualTo(withdrawValueAndFee.value),
-    'authorize reports correct value'
+    'authorize reports correct value for withdraw amount'
   )
 }
 
