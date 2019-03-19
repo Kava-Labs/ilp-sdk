@@ -476,21 +476,16 @@ export const getBaseBalance = (state: State) => async (
   uplink: ReadyUplinks
 ) => {
   const credential = getCredential(state)(uplink.credentialId)!
-  const settler = state.settlers[uplink.settlerType]
 
   switch (credential.settlerType) {
     case SettlementEngineType.Lnd:
       return Lnd.getBaseBalance(credential)
     case SettlementEngineType.Machinomy:
-      return Machinomy.getBaseBalance(
-        settler as MachinomySettlementEngine,
-        credential
-      )
+      const machinomySettler = state.settlers[credential.settlerType]
+      return Machinomy.getBaseBalance(machinomySettler, credential)
     case SettlementEngineType.XrpPaychan:
-      return XrpPaychan.getBaseBalance(
-        settler as XrpPaychanSettlementEngine,
-        credential
-      )
+      const xrpSettler = state.settlers[credential.settlerType]
+      return XrpPaychan.getBaseBalance(xrpSettler, credential)
   }
 }
 
