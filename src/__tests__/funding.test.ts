@@ -62,12 +62,6 @@ export const testFunding = (
   t.true(
     initialBaseBalance
       .minus(baseBalanceAfterOpen)
-      .isGreaterThanOrEqualTo(openAmount),
-    'after channel open, base balance is reduced by at least the open amount'
-  )
-  t.true(
-    initialBaseBalance
-      .minus(baseBalanceAfterOpen)
       .isEqualTo(openAmount.plus(channelOpenValueAndFee.fee)),
     'after channel open, base balance is reduced by exactly the reported fee + open amount'
   )
@@ -89,12 +83,6 @@ export const testFunding = (
     'balance$ correctly reflects the deposit to the channel'
   )
   const baseBalanceAfterDeposit = await getBaseBalance(uplink)
-  t.true(
-    baseBalanceAfterOpen
-      .minus(baseBalanceAfterDeposit)
-      .isGreaterThanOrEqualTo(depositAmount),
-    'after deposit, base balance is reduced by at least the deposit amount'
-  )
   t.true(
     baseBalanceAfterOpen
       .minus(baseBalanceAfterDeposit)
