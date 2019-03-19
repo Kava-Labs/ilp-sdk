@@ -130,7 +130,7 @@ export const testFunding = (
     baseBalanceAfterWithdraw
       .minus(baseBalanceAfterDeposit)
       .isLessThanOrEqualTo(withdrawAmount),
-    'after withdraw, base balance is increased by up to withdraw amount'
+    'after withdraw, base balance is increased no more than the withdraw amount'
   )
   t.true(
     baseBalanceAfterWithdraw
