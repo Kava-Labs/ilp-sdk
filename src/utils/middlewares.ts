@@ -10,6 +10,7 @@ import { DataHandler, Logger, Plugin } from '../types/plugin'
 import { MemoryStore } from './store'
 import { defaultDataHandler } from './packet'
 import { BehaviorSubject } from 'rxjs'
+import { sha256 } from '../utils/crypto'
 
 // Almost never use exponential notation
 BigNumber.config({ EXPONENTIAL_AT: 1e9 })
@@ -129,7 +130,7 @@ export class PluginWrapper {
   async sendData(data: Buffer): Promise<Buffer> {
     const next = () => this.plugin.sendData(data)
 
-    const { amount } = deserializeIlpPrepare(data)
+    const { amount, executionCondition } = deserializeIlpPrepare(data)
     if (amount === '0') {
       return next()
     }
@@ -138,6 +139,19 @@ export class PluginWrapper {
     const reply = deserializeIlpReply(response)
 
     if (isFulfill(reply)) {
+      const isValidFulfillment = sha256(reply.fulfillment).equals(
+        executionCondition
+      )
+      if (!isValidFulfillment) {
+        this.log.debug('Received FULFILL with invalid fulfillment')
+        return serializeIlpReject({
+          code: 'F05',
+          message: 'fulfillment did not match expected value.',
+          triggeredBy: '',
+          data: Buffer.alloc(0)
+        })
+      }
+
       this.log.debug(
         `Received FULFILL in response to forwarded PREPARE: credited ${this.format(
           amount
