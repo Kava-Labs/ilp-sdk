@@ -60,7 +60,7 @@ export const streamMoney = (state: State) => async ({
   const amountToSend = convert(
     sourceSettler.exchangeUnit(amount),
     sourceSettler.baseUnit()
-  )
+  ).decimalPlaces(0, BigNumber.ROUND_DOWN)
 
   /**
    * Why no test packets?
