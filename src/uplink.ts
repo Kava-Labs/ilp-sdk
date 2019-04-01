@@ -14,41 +14,54 @@ import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
-import { startStreamServer, stopStreamServer } from './services/stream-server'
+import { ReadyCredentials, getCredential, getCredentialId } from './credential'
 import { SettlementEngine, SettlementEngineType } from './engine'
-import { LndBaseUplink, LndUplinkConfig, Lnd } from './settlement/lnd'
-import {
-  XrpPaychanBaseUplink,
-  XrpPaychanUplinkConfig,
-  XrpPaychan
-} from './settlement/xrp-paychan'
+import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
+import { Lnd, LndBaseUplink, LndSettlementEngine } from './settlement/lnd'
+import {
+  XrpPaychan,
+  XrpPaychanBaseUplink,
+  XrpPaychanSettlementEngine,
+  ValidatedXrpSecret,
+  ReadyXrpPaychanUplink
+} from './settlement/xrp-paychan'
+import {
+  Machinomy,
+  MachinomyBaseUplink,
+  MachinomySettlementEngine,
+  ReadyEthereumCredential,
+  ReadyMachinomyUplink
+} from './settlement/machinomy'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
-import { ReadyCredentials, getCredentialId } from './credential'
 import { generateSecret, generateToken } from './utils/crypto'
-import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
 
 const log = createLogger('switch-api:uplink')
 
+/** TODO The config to export should be *re-generated* each time by an uplink */
+
 export interface BaseUplinkConfig {
-  settlerType: SettlementEngineType
-  stream: {
-    /** Enables deterministic generation of previous shared secrets so we can accept payments */
-    serverSecret: Buffer
+  readonly settlerType: SettlementEngineType
+  readonly credentialId: string
+  readonly stream: {
+    /**
+     * Deterministic generation of previous shared secrets so we can accept payments
+     * - Encoded as a hex string
+     */
+    readonly serverSecret: string
   }
-  plugin: {
-    btp: {
-      serverUri: string
-      authToken: string
+  readonly plugin: {
+    readonly btp: {
+      readonly serverUri: string
+      readonly authToken: string
     }
-    store: SimpleStore
+    // TODO Should the wrapper & plugin have separate stores? (for security) (with new connector, it probs won't)
+    // TODO Should the store be versioned to the version of the plugin? (would make migrations easier)
+    readonly store: SimpleStore
   }
 }
-
-export type UplinkConfig = (LndUplinkConfig | XrpPaychanUplinkConfig) &
-  BaseUplinkConfig
 
 export interface BaseUplink {
   readonly plugin: Plugin
@@ -85,8 +98,10 @@ export interface ReadyUplink {
   /** Wrapper plugin with balance logic to and perform accounting and limit the packets we fulfill */
   readonly pluginWrapper: PluginWrapper
   /** Handle incoming packets from the endpoint sending money or trading */
+  /* tslint:disable-next-line:readonly-keyword TODO */
   streamClientHandler: IlpPrepareHandler
   /** Handle incoming packets from the endpoint receiving money from other parties */
+  /* tslint:disable-next-line:readonly-keyword TODO */
   streamServerHandler: DataHandler
   /** ILP address assigned from upstream connector */
   readonly clientAddress: string
@@ -98,8 +113,10 @@ export interface ReadyUplink {
   readonly availableToSend$: BehaviorSubject<BigNumber>
   /** Total amount that we could receive immediately over Interledger */
   readonly availableToReceive$: BehaviorSubject<BigNumber>
-  /** STREAM server to accept incoming payments from any Interledger user */
+  /** STREAM server to accept incoming payments from any Interledger client */
   readonly streamServer: StreamServer
+  /** TODO */
+  readonly config: BaseUplinkConfig
 }
 
 export type ReadyUplinks = ReadyUplink & BaseUplinks
@@ -136,8 +153,8 @@ export const createUplink = (state: State) => async (
   const alreadyExists = state.uplinks.some(
     someUplink =>
       someUplink.credentialId === credentialId &&
-      someUplink.settlerType === readyCredential.settlerType &&
-      false // TODO This MUST comapre the connector it's connected to!
+      someUplink.settlerType === readyCredential.settlerType
+    // TODO This MUST compare the connector it's connected to!
   )
   if (alreadyExists) {
     throw new Error('Cannot create duplicate uplink')
@@ -145,8 +162,9 @@ export const createUplink = (state: State) => async (
 
   const config: BaseUplinkConfig = {
     settlerType: readyCredential.settlerType,
+    credentialId,
     stream: {
-      serverSecret: await generateSecret()
+      serverSecret: (await generateSecret()).toString('hex')
     },
     plugin: {
       btp: {
@@ -205,6 +223,7 @@ export const connectUplink = (state: State) => (
     totalReceived$.pipe(distinctBigNum)
   )
     .pipe(sumAll)
+    // TODO Try subscribing directly...?
     .subscribe(
       amount => {
         balance$.next(amount)
@@ -230,7 +249,9 @@ export const connectUplink = (state: State) => (
   //      the peer needs the capacity to send us the settlement for that -- it should be subtracted!
 
   const handlers: {
+    /* tslint:disable-next-line:readonly-keyword TODO */
     streamServerHandler: DataHandler
+    /* tslint:disable-next-line:readonly-keyword TODO */
     streamClientHandler: IlpPrepareHandler
   } = {
     streamServerHandler: defaultDataHandler,
@@ -246,13 +267,14 @@ export const connectUplink = (state: State) => (
   )
 
   // Accept incoming payments
+  // TODO For now, this won't work, because the original non-wrapper plugin won't auto settle
   const registerServerHandler = (handler: DataHandler) => {
     handlers.streamServerHandler = handler
   }
   const streamServer = await startStreamServer(
     plugin,
     registerServerHandler,
-    config.stream.serverSecret
+    Buffer.from(config.stream.serverSecret, 'hex')
   )
 
   return Object.assign(handlers, {
@@ -263,7 +285,8 @@ export const connectUplink = (state: State) => (
     pluginWrapper,
     balance$,
     availableToSend$,
-    availableToReceive$
+    availableToReceive$,
+    config
   })
 }
 
@@ -279,7 +302,7 @@ export const connectUplink = (state: State) => (
  * EFFECT: registers handlers on the plugin
  */
 export const setupHandlers = (
-  plugin: Plugin,
+  plugin: PluginWrapper,
   clientAddress: string,
   streamServerHandler: DataHandler,
   streamClientHandler: IlpPrepareHandler
@@ -355,7 +378,7 @@ export const sendPacket = async (
  * Registers a handler for incoming packets not addressed to a
  * specific Stream connection, such as packets sent from another uplink
  *
- * EFFECT: changes data handler on internal plugin
+ * EFFECT: mutates data handler mapped to the internal plugin
  */
 export const registerPacketHandler = (handler: IlpPrepareHandler) => (
   uplink: ReadyUplinks
@@ -363,6 +386,12 @@ export const registerPacketHandler = (handler: IlpPrepareHandler) => (
   uplink.streamClientHandler = handler
 }
 
+/**
+ * Removes an existing handler for incoming packets not
+ * addressed to a specific Stream connection
+ *
+ * EFFECT: mutates data handler mapped to the internal plugin
+ */
 export const deregisterPacketHandler = registerPacketHandler(
   defaultIlpPrepareHandler
 )
@@ -388,16 +417,16 @@ export const getNativeMaxInFlight = async (
 
 export type AuthorizeDeposit = (params: {
   /** Total amount that will move from layer 1 to layer 2, in units of exchange */
-  value: BigNumber
+  readonly value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  fee: BigNumber
+  readonly fee: BigNumber
 }) => Promise<void>
 
 export type AuthorizeWithdrawal = (params: {
   /** Total amount that will move from layer 2 to layer 1, in units of exchange */
-  value: BigNumber
+  readonly value: BigNumber
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  fee: BigNumber
+  readonly fee: BigNumber
 }) => Promise<void>
 
 export const depositToUplink = (uplink: ReadyUplinks) => {
@@ -436,6 +465,28 @@ export const closeUplink = async (uplink: ReadyUplinks) => {
     log.error('Error stopping Stream server: ', err)
   )
   return uplink.plugin.disconnect()
+}
+
+/**
+ * ------------------------------------
+ * BASE LAYER BALANCE
+ * ------------------------------------
+ */
+export const getBaseBalance = (state: State) => async (
+  uplink: ReadyUplinks
+) => {
+  const credential = getCredential(state)(uplink.credentialId)!
+
+  switch (credential.settlerType) {
+    case SettlementEngineType.Lnd:
+      return Lnd.getBaseBalance(credential)
+    case SettlementEngineType.Machinomy:
+      const machinomySettler = state.settlers[credential.settlerType]
+      return Machinomy.getBaseBalance(machinomySettler, credential)
+    case SettlementEngineType.XrpPaychan:
+      const xrpSettler = state.settlers[credential.settlerType]
+      return XrpPaychan.getBaseBalance(xrpSettler, credential)
+  }
 }
 
 /**
