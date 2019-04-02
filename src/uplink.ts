@@ -14,25 +14,18 @@ import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
-import { ReadyCredentials, getCredential, getCredentialId } from './credential'
+import {
+  ReadyCredentials,
+  getCredential,
+  getCredentialId,
+  closeCredential
+} from './credential'
 import { SettlementEngine, SettlementEngineType } from './engine'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
-import { Lnd, LndBaseUplink, LndSettlementEngine } from './settlement/lnd'
-import {
-  XrpPaychan,
-  XrpPaychanBaseUplink,
-  XrpPaychanSettlementEngine,
-  ValidatedXrpSecret,
-  ReadyXrpPaychanUplink
-} from './settlement/xrp-paychan'
-import {
-  Machinomy,
-  MachinomyBaseUplink,
-  MachinomySettlementEngine,
-  ReadyEthereumCredential,
-  ReadyMachinomyUplink
-} from './settlement/machinomy'
+import { Lnd, LndBaseUplink } from './settlement/lnd'
+import { XrpPaychan, XrpPaychanBaseUplink } from './settlement/xrp-paychan'
+import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
 import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
 import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
@@ -157,6 +150,7 @@ export const createUplink = (state: State) => async (
     // TODO This MUST compare the connector it's connected to!
   )
   if (alreadyExists) {
+    await closeCredential(readyCredential)
     throw new Error('Cannot create duplicate uplink')
   }
 
