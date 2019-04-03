@@ -1,6 +1,6 @@
 {
   "name": "@kava-labs/switch-api",
-  "version": "0.4.3",
+  "version": "0.4.5",
   "description": "Simple API to stream Interledger payments between Bitcoin, Ethereum and XRP",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -47,32 +47,27 @@
   "homepage": "https://github.com/Kava-Labs/switch-api#readme",
   "dependencies": {
     "@kava-labs/crypto-rate-utils": "^3.0.0",
-    "@kava-labs/ilp-plugin-xrp-paychan": "^0.4.0",
-    "argon2": "^0.20.1",
+    "@kava-labs/ilp-plugin-xrp-paychan": "^0.4.2",
     "axios": "^0.18.0",
     "bignumber.js": "^7.2.1",
-    "ethereumjs-util": "^6.1.0",
+    "ethers": "^4.0.27",
     "fp-ts": "^1.14.3",
     "ilp-packet": "^3.0.8",
-    "ilp-plugin-ethereum": "^3.0.0-beta.14",
-    "ilp-plugin-lightning": "^1.0.0-beta.23",
+    "ilp-plugin-ethereum": "^3.0.0-beta.16",
+    "ilp-plugin-lightning": "^1.0.0-beta.25",
     "ilp-protocol-ildcp": "^2.0.1",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#3fe1f02273c8ac60927d902c7a88c45111c5699b",
     "oer-utils": "^4.0.0",
     "ripple-keypairs": "^0.11.0",
     "ripple-lib": "^1.1.2",
-    "rxjs": "^6.4.0",
-    "web3": "1.0.0-beta.37"
+    "rxjs": "^6.4.0"
   },
   "peerDependencies": {
     "bignumber.js": "7.x",
     "rxjs": "6.x"
   },
   "devDependencies": {
-    "@types/google-protobuf": "^3.2.7",
     "@types/node": "^10.12.21",
-    "@types/protobufjs": "^5.0.31",
-    "@types/web3": "^1.0.18",
     "ava": "^1.2.1",
     "codecov": "^3.2.0",
     "envkey": "^1.2.5",
@@ -80,7 +75,6 @@
     "npm-run-all": "^4.1.3",
     "nyc": "^13.3.0",
     "prettier": "^1.16.4",
-    "source-map-support": "^0.5.10",
     "ts-node": "^8.0.2",
     "tslint": "^5.13.0",
     "tslint-config-prettier": "^1.18.0",

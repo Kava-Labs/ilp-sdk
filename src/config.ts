@@ -4,8 +4,8 @@ import { BaseUplinkConfig } from './uplink'
 import { open, readFile, writeFile, mkdir, ftruncate } from 'fs'
 import { promisify } from 'util'
 import { homedir } from 'os'
-import { hash, verify, argon2id } from 'argon2'
-import { randomBytes, createCipheriv } from 'crypto'
+// import { hash, verify, argon2id } from 'argon2'
+// import { randomBytes, createCipheriv } from 'crypto'
 
 // TODO Basic versioning?
 // TODO Use ConfigSchema[] to enable testnet + mainnet configs?

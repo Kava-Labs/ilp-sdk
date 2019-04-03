@@ -2,22 +2,20 @@ import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
-  ChannelBalanceRequest,
-  connectLnd,
+  createGrpcClient,
   createInvoiceStream,
+  createLnrpc,
   createPaymentStream,
-  GetInfoRequest,
-  Invoice,
+  GrpcClient,
   InvoiceStream,
   LndService,
-  PaymentStream,
-  SendResponse,
-  WalletBalanceRequest,
-  waitForReady
+  lnrpc,
+  PaymentStream
 } from 'ilp-plugin-lightning'
 import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
 import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
+import { promisify } from 'util'
 import { LedgerEnv, State } from '..'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import { Flavor } from '../types/util'
@@ -76,7 +74,6 @@ export type ValidHost = {
 }
 
 export interface ValidatedLndCredential {
-  /** TODO */
   readonly settlerType: SettlementEngineType.Lnd
   /** LND node hostname that exposes peering and gRPC server on different ports */
   readonly hostname: string
@@ -92,7 +89,9 @@ export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
 
 export interface ReadyLndCredential {
   readonly settlerType: SettlementEngineType.Lnd
-  /** gRPC client connected to Lighnting node for performing requests */
+  /** gRPC client for raw RPC calls */
+  readonly grpcClient: GrpcClient
+  /** Wrapped gRPC client in a Lightning RPC service with typed methods and messages */
   readonly service: LndService
   /** Bidirectional streaming RPC to send outgoing payments and receive attestations */
   readonly paymentStream: PaymentStream
@@ -107,8 +106,8 @@ export interface ReadyLndCredential {
 }
 
 const fetchChannelBalance = async (lightning: LndService) => {
-  const res = await lightning.channelBalance(new ChannelBalanceRequest())
-  return convert(satoshi(res.getBalance()), btc())
+  const res = await lightning.channelBalance({})
+  return convert(satoshi(res.balance.toString()), btc())
 }
 
 const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
@@ -118,20 +117,22 @@ const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
   ReadyLndCredential
 > => {
   // Create and connect the internal LND service (passed to plugins)
-  const service = connectLnd(opts)
-  await waitForReady(service)
+  const grpcClient = createGrpcClient(opts)
+  await promisify(grpcClient.waitForReady.bind(grpcClient))(Date.now() + 10000)
+
+  const service = createLnrpc(grpcClient)
 
   // Fetch the public key so the user doesn't have to provide it
   // (necessary as a unique identifier for this LND node)
-  const response = await service.getInfo(new GetInfoRequest())
-  const identityPublicKey = response.getIdentityPubkey()
+  const response = await service.getInfo({})
+  const identityPublicKey = response.identityPubkey
 
   const paymentStream = createPaymentStream(service)
-  const payments$ = fromEvent<SendResponse>(paymentStream, 'data')
+  const payments$ = fromEvent<lnrpc.SendResponse>(paymentStream, 'data')
   const invoiceStream = createInvoiceStream(service)
-  const invoices$ = fromEvent<Invoice>(invoiceStream, 'data').pipe(
+  const invoices$ = fromEvent<lnrpc.IInvoice>(invoiceStream, 'data').pipe(
     // Only refresh when invoices are paid/settled
-    filter(invoice => invoice.getSettled())
+    filter(invoice => !!invoice.settled)
   )
 
   // Fetch an updated channel balance every 3s, or whenever an invoice is paid (by us or counterparty)
@@ -146,6 +147,7 @@ const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
 
   return {
     settlerType: SettlementEngineType.Lnd,
+    grpcClient,
     service,
     paymentStream,
     invoiceStream,
@@ -156,8 +158,8 @@ const setupCredential = (opts: ValidatedLndCredential) => async (): Promise<
 }
 
 // TODO Also unsubscribe/end all of the event listeners (confirm there aren't any memory leaks)
-export const closeCredential = async ({ service }: ReadyLndCredential) =>
-  service.close()
+export const closeCredential = async ({ grpcClient }: ReadyLndCredential) =>
+  grpcClient.close()
 
 export const configFromLndCredential = (
   cred: ReadyLndCredential
@@ -179,7 +181,7 @@ export interface LndBaseUplink extends BaseUplink {
   readonly credentialId: LndIdentityPublicKey
 }
 
-export type ReadyLndUplink = LndBaseUplink & ReadyUplink // TODO 'ReadyUplink' doesn't exist!
+export type ReadyLndUplink = LndBaseUplink & ReadyUplink
 
 // TODO Is the base config fine?
 const connectUplink = (credential: ReadyLndCredential) => (
@@ -224,9 +226,9 @@ const connectUplink = (credential: ReadyLndCredential) => (
 
 export const getBaseBalance = async (credential: ReadyLndCredential) => {
   const lndService = credential.service
-  const baseBalance = await lndService.walletBalance(new WalletBalanceRequest())
+  const baseBalance = await lndService.walletBalance({})
   return convert(
-    satoshi(new BigNumber(baseBalance.getConfirmedBalance())),
+    satoshi(new BigNumber(baseBalance.confirmedBalance.toString())),
     btc()
   )
 }
