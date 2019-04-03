@@ -150,7 +150,6 @@ export const createUplink = (state: State) => async (
     // TODO This MUST compare the connector it's connected to!
   )
   if (alreadyExists) {
-    await closeCredential(readyCredential)
     throw new Error('Cannot create duplicate uplink')
   }
 
@@ -189,13 +188,15 @@ export const connectUplink = (state: State) => (
   credential: ReadyCredentials
 ) => async (config: BaseUplinkConfig): Promise<ReadyUplinks> => {
   const uplink = await connectBaseUplink(credential)(state)(config)
-  const settler = state.settlers[config.settlerType]
   const {
     plugin,
     outgoingCapacity$,
     incomingCapacity$,
     totalReceived$
   } = uplink
+
+  const settler = state.settlers[config.settlerType]
+  const { exchangeUnit, baseUnit } = settler
 
   const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
   const pluginWrapper = new PluginWrapper({
@@ -230,17 +231,33 @@ export const connectUplink = (state: State) => (
       }
     )
 
+  const convertToExchangeUnit = map((value: BigNumber) =>
+    convert(baseUnit(value), exchangeUnit())
+  )
+
+  // Available to receive (ILP packets) = incomingCapacity - credit already extended
   const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
-  incomingCapacity$.pipe(distinctBigNum).subscribe(availableToReceive$)
+  combineLatest(
+    incomingCapacity$.pipe(distinctBigNum),
+    pluginWrapper.receivableBalance$.pipe(
+      distinctBigNum,
+      convertToExchangeUnit
+    )
+  )
+    .pipe(subtract)
+    .subscribe(availableToReceive$)
 
+  // Available to send (ILP packets) = outgoingCapacity + amount prefunded
   const availableToSend$ = new BehaviorSubject(new BigNumber(0))
-  outgoingCapacity$.pipe(distinctBigNum).subscribe(availableToSend$)
-
-  // TODO Add back "availableToCredit" and "availableToDebit"
-  //      Use them to halve bilateral trust so we wait for a settlement on receiving side before next packet
-
-  // TODO Also, credit extended should NOT be included in incoming capacity since
-  //      the peer needs the capacity to send us the settlement for that -- it should be subtracted!
+  combineLatest(
+    outgoingCapacity$.pipe(distinctBigNum),
+    pluginWrapper.payableBalance$.pipe(
+      distinctBigNum,
+      convertToExchangeUnit
+    )
+  )
+    .pipe(subtract)
+    .subscribe(availableToSend$)
 
   const handlers: {
     /* tslint:disable-next-line:readonly-keyword TODO */
@@ -492,6 +509,8 @@ export const getBaseBalance = (state: State) => async (
 export const sumAll = map((values: BigNumber[]) =>
   values.reduce((a, b) => a.plus(b))
 )
+
+export const subtract = map(([a, b]: [BigNumber, BigNumber]) => a.minus(b))
 
 export const distinctBigNum = distinctUntilChanged(
   (prev: BigNumber, curr: BigNumber) => prev.isEqualTo(curr)
