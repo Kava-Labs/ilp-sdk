@@ -54,7 +54,7 @@
     "fp-ts": "^1.14.3",
     "ilp-packet": "^3.0.8",
     "ilp-plugin-ethereum": "^3.0.0-beta.16",
-    "ilp-plugin-lightning": "^1.0.0-beta.24",
+    "ilp-plugin-lightning": "^1.0.0-beta.25",
     "ilp-protocol-ildcp": "^2.0.1",
     "ilp-protocol-stream": "github:interledgerjs/ilp-protocol-stream#3fe1f02273c8ac60927d902c7a88c45111c5699b",
     "oer-utils": "^4.0.0",
