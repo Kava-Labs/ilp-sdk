@@ -1,6 +1,6 @@
 {
   "name": "@kava-labs/switch-api",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Simple API to stream Interledger payments between Bitcoin, Ethereum and XRP",
   "main": "build/index.js",
   "types": "build/index.d.ts",
