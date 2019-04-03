@@ -1,29 +1,27 @@
 import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import { privateToAddress, toBuffer } from 'ethereumjs-util'
+import { ethers } from 'ethers'
 import EthereumPlugin, {
+  ClaimablePaymentChannel,
   EthereumAccount,
-  remainingInChannel,
-  spentFromChannel,
   PaymentChannel,
-  ClaimablePaymentChannel
+  remainingInChannel,
+  spentFromChannel
 } from 'ilp-plugin-ethereum'
+import { BehaviorSubject, fromEvent } from 'rxjs'
+import { first, map, startWith, timeout } from 'rxjs/operators'
+import { LedgerEnv, State } from '..'
+import { SettlementEngine, SettlementEngineType } from '../engine'
 import {
   AuthorizeDeposit,
   AuthorizeWithdrawal,
-  ReadyUplink,
+  BaseUplink,
   BaseUplinkConfig,
-  BaseUplink
+  ReadyUplink
 } from '../uplink'
-import { MemoryStore } from '../utils/store'
-import Web3 from 'web3'
-import { HttpProvider } from 'web3/providers'
 import createLogger from '../utils/log'
-import { SettlementEngine, SettlementEngineType } from '../engine'
+import { MemoryStore } from '../utils/store'
 import { fetchGasPrice } from './shared/eth'
-import { LedgerEnv, State } from '..'
-import { BehaviorSubject, fromEvent } from 'rxjs'
-import { map, timeout, first, startWith } from 'rxjs/operators'
 
 /**
  * ------------------------------------
@@ -33,16 +31,15 @@ import { map, timeout, first, startWith } from 'rxjs/operators'
 
 export interface MachinomySettlementEngine extends SettlementEngine {
   readonly settlerType: SettlementEngineType.Machinomy
-  readonly ethereumProvider: HttpProvider
+  readonly ethereumProvider: ethers.providers.Provider
+  readonly fetchGasPrice?: () => Promise<BigNumber>
 }
 
 export const setupEngine = async (
   ledgerEnv: LedgerEnv
 ): Promise<MachinomySettlementEngine> => {
-  const network = ledgerEnv === 'mainnet' ? 'mainnet' : 'kovan'
-  const ethereumProvider = new Web3.providers.HttpProvider(
-    `https://${network}.infura.io/v3/92e263da65ac4703bf99df7828c6beca`
-  )
+  const network = ledgerEnv === LedgerEnv.Mainnet ? 'homestead' : 'kovan'
+  const ethereumProvider = ethers.getDefaultProvider(network)
 
   return {
     settlerType: SettlementEngineType.Machinomy,
@@ -60,7 +57,11 @@ export const setupEngine = async (
       },
       mainnet: {}
     }[ledgerEnv],
-    ethereumProvider
+    ethereumProvider,
+    fetchGasPrice:
+      ledgerEnv === LedgerEnv.Mainnet
+        ? fetchGasPrice(ethereumProvider)
+        : undefined
   }
 }
 
@@ -81,15 +82,12 @@ export type ReadyEthereumCredential = {
   readonly address: string
 }
 
-/**
- * Ensure that the given string begins with given prefix
- * - Prefix the string if it doesn't already
- */
-const ensurePrefixedWith = (prefix: string, str: string) =>
-  str.startsWith(prefix) ? str : prefix + str
+/** Ensure that the given hex string begins with "0x" */
+const ensureHexPrefix = (hexStr: string) =>
+  hexStr.startsWith('0x') ? hexStr : '0x' + hexStr
 
 const addressFromPrivate = (privateKey: string) =>
-  privateToAddress(toBuffer(privateKey)).toString('hex')
+  ethers.utils.computeAddress(privateKey)
 
 // TODO If the private key is invalid, this should return a specific error rather than throwing
 export const setupCredential = ({
@@ -99,11 +97,8 @@ export const setupCredential = ({
   ReadyEthereumCredential
 > => ({
   settlerType,
-  privateKey: ensurePrefixedWith('0x', privateKey),
-  address: ensurePrefixedWith(
-    '0x',
-    addressFromPrivate(ensurePrefixedWith('0x', privateKey))
-  )
+  privateKey: ensureHexPrefix(privateKey),
+  address: addressFromPrivate(ensureHexPrefix(privateKey))
 })
 
 export const uniqueId = (cred: ReadyEthereumCredential) => cred.address
@@ -117,12 +112,10 @@ export const getBaseBalance = async (
   settler: MachinomySettlementEngine,
   credential: ReadyEthereumCredential
 ) => {
-  const web3 = new Web3(settler.ethereumProvider)
-  const balanceWei = new BigNumber(
-    (await web3.eth.getBalance(credential.address)).toString()
+  const balanceWei = await settler.ethereumProvider.getBalance(
+    credential.address
   )
-
-  return convert(wei(balanceWei), eth())
+  return convert(wei(balanceWei.toString()), eth())
 }
 
 /**
@@ -153,9 +146,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   const { privateKey: ethereumPrivateKey } = credential
 
   const settler = state.settlers[credential.settlerType]
-  const { ethereumProvider } = settler
-
-  const getGasPrice = () => fetchGasPrice(state)(settler)
+  const { ethereumProvider, fetchGasPrice } = settler
 
   const plugin = new EthereumPlugin(
     {
@@ -163,7 +154,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
       server,
       ethereumPrivateKey,
       ethereumProvider,
-      getGasPrice
+      getGasPrice: fetchGasPrice
     },
     {
       store: new MemoryStore(store),
