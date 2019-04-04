@@ -46,6 +46,7 @@
   },
   "homepage": "https://github.com/Kava-Labs/switch-api#readme",
   "dependencies": {
+    "@kava-labs/switch-api": "file:./",
     "@kava-labs/crypto-rate-utils": "^3.0.0",
     "@kava-labs/ilp-plugin-xrp-paychan": "^0.4.2",
     "axios": "^0.18.0",
