@@ -34,12 +34,12 @@ import {
   connectUplink,
   getBaseBalance
 } from './uplink'
-import { loadConfig, persistConfig } from './config'
+import { loadConfig, prepareEncryption, serializeConfig } from './config'
 import { close } from 'fs'
 import { promisify } from 'util'
 
 type ThenArg<T> = T extends Promise<infer U> ? U : T
-export type SwitchApi = ThenArg<ReturnType<typeof connect>>
+export type IlpSdk = ThenArg<ReturnType<typeof connect>>
 
 export enum LedgerEnv {
   Mainnet = 'mainnet',
@@ -68,10 +68,11 @@ export interface State {
 
 export { CONFIG_PATH } from './config'
 
-export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
-  const [fileDescriptor, config] = await loadConfig()
-
-  // TODO Make sure the config has the right ledgerEnv to support multiple? Idk
+export const connect = async (
+  ledgerEnv: LedgerEnv = LedgerEnv.Testnet,
+  password?: string
+) => {
+  const [fileDescriptor, config] = await loadConfig(password)
 
   const state: State = {
     ledgerEnv,
@@ -86,28 +87,35 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
     uplinks: []
   }
 
-  // TODO Handle error cases if the uplinks fail to connect
+  // If the config exists for this environment (e.g. testnet, mainnet), load that
+  const envConfig = config[ledgerEnv]
+  if (envConfig) {
+    state.credentials = await Promise.all<ReadyCredentials>(
+      envConfig.credentials.map(cred => setupCredential(cred)(state))
+    )
 
-  state.credentials = config
-    ? await Promise.all<ReadyCredentials>(
-        config.credentials.map(cred => setupCredential(cred)(state))
-      )
-    : []
+    // TODO Handle error cases if the uplinks fail to connect
+    state.uplinks = await Promise.all(
+      envConfig.uplinks.map(uplinkConfig => {
+        // TODO What if, for some reason, the credential doesn't exist?
+        const cred = getCredential(state)(uplinkConfig.credentialId)
+        return connectUplink(state)(cred!)(uplinkConfig)
+      })
+    )
+  }
 
-  state.uplinks = config
-    ? await Promise.all(
-        config.uplinks.map(uplinkConfig => {
-          // TODO What if, for some reason, the credential doesn't exist?
-          const cred = getCredential(state)(uplinkConfig.credentialId)
-          return connectUplink(state)(cred!)(uplinkConfig)
-        })
-      )
-    : []
+  // Derive the key from the password, so it's cached and ready to persist
+  const persistFile = await prepareEncryption(fileDescriptor, password)
 
-  const saveInterval = setInterval(
-    () => persistConfig(fileDescriptor, state),
-    10000
-  )
+  const persistConfig = () =>
+    persistFile(
+      JSON.stringify({
+        ...config,
+        ...serializeConfig(state)
+      })
+    )
+
+  const saveInterval = setInterval(persistConfig, 10000)
 
   const add = async (
     credentialConfig: CredentialConfigs
@@ -174,7 +182,7 @@ export const connect = async (ledgerEnv: LedgerEnv = LedgerEnv.Testnet) => {
 
   const disconnect = async () => {
     clearInterval(saveInterval)
-    await persistConfig(fileDescriptor, state)
+    await persistConfig()
     await Promise.all(state.uplinks.map(closeUplink))
     await Promise.all(state.credentials.map(closeCredential))
     await Promise.all(Object.values(state.settlers).map(closeEngine))

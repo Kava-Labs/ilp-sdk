@@ -1,13 +1,13 @@
 import anyTest, { TestInterface } from 'ava'
 import 'envkey'
-import { SwitchApi, connect, LedgerEnv } from '..'
+import { IlpSdk, connect, LedgerEnv } from '..'
 import { addEth } from './helpers'
 import BigNumber from 'bignumber.js'
 import { promisify } from 'util'
 import { unlink } from 'fs'
 import { CONFIG_PATH } from '../config'
 
-const test = anyTest as TestInterface<SwitchApi>
+const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 

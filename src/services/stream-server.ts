@@ -1,5 +1,5 @@
 import * as IlpStream from 'ilp-protocol-stream'
-import { Plugin, DataHandler, IlpStreamPlugin } from 'types/plugin'
+import { Plugin, DataHandler, IlpStreamPlugin } from '../types/plugin'
 import { defaultDataHandler } from '../utils/packet'
 
 export const startStreamServer = async (

@@ -1,15 +1,15 @@
-import { SwitchApi, SettlementEngineType, ReadyUplinks } from '..'
+import { IlpSdk, SettlementEngineType, ReadyUplinks } from '..'
 import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { AuthorizeDeposit, AuthorizeWithdrawal } from '../uplink'
 
-export const addEth = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
+export const addEth = (n = 1) => ({ add }: IlpSdk): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Machinomy,
     privateKey: process.env[`ETH_PRIVATE_KEY_CLIENT_${n}`]!
   })
 
-export const addBtc = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
+export const addBtc = (n = 1) => ({ add }: IlpSdk): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.Lnd,
     hostname: process.env[`LIGHTNING_LND_HOST_CLIENT_${n}`]!,
@@ -18,14 +18,14 @@ export const addBtc = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
     grpcPort: parseInt(process.env[`LIGHTNING_LND_GRPCPORT_CLIENT_${n}`]!, 10)
   })
 
-export const addXrp = (n = 1) => ({ add }: SwitchApi): Promise<ReadyUplinks> =>
+export const addXrp = (n = 1) => ({ add }: IlpSdk): Promise<ReadyUplinks> =>
   add({
     settlerType: SettlementEngineType.XrpPaychan,
     secret: process.env[`XRP_SECRET_CLIENT_${n}`]!
   })
 
-export const createFundedUplink = (api: SwitchApi) => async (
-  createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
+export const createFundedUplink = (api: IlpSdk) => async (
+  createUplink: (api: IlpSdk) => Promise<ReadyUplinks>
 ) => {
   const uplink = await createUplink(api)
 
