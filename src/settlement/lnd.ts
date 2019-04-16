@@ -48,7 +48,9 @@ const setupEngine = async (
     testnet: {
       'Kava Labs': (token: string) => `btp+wss://:${token}@test.ilp.kava.io/btc`
     },
-    mainnet: {}
+    mainnet: {
+      'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/btc`
+    }
   }[ledgerEnv]
 })
 

@@ -1,5 +1,5 @@
 import anyTest, { TestInterface, ExecutionContext } from 'ava'
-import { SwitchApi, connect, LedgerEnv, ReadyUplinks } from '..'
+import { IlpSdk, connect, LedgerEnv, ReadyUplinks } from '..'
 import { addEth, addXrp, addBtc, createFundedUplink } from './helpers'
 import { promisify } from 'util'
 import { unlink } from 'fs'
@@ -8,7 +8,7 @@ import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import { performance } from 'perf_hooks'
 require('envkey')
 
-const test = anyTest as TestInterface<SwitchApi>
+const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 
@@ -23,9 +23,9 @@ test.beforeEach(async t => {
 test.afterEach(async t => t.context.disconnect())
 
 export const testExchange = (
-  createSource: (api: SwitchApi) => Promise<ReadyUplinks>,
-  createDest: (api: SwitchApi) => Promise<ReadyUplinks>
-) => async (t: ExecutionContext<SwitchApi>) => {
+  createSource: (api: IlpSdk) => Promise<ReadyUplinks>,
+  createDest: (api: IlpSdk) => Promise<ReadyUplinks>
+) => async (t: ExecutionContext<IlpSdk>) => {
   const api = t.context
   const { state, streamMoney } = api
 

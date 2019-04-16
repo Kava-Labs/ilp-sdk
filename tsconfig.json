@@ -18,7 +18,8 @@
     "pretty": true /* Stylize errors and messages using color and context. */,
     "typeRoots": ["node_modules/@types", "src/types"],
     "paths": {
-      "ripple-keypairs": ["./types/ripple-keypairs"]
+      "ripple-keypairs": ["./types/ripple-keypairs"],
+      "ripple-address-codec": ["./types/ripple-address-codec"]
     }
   }
 }

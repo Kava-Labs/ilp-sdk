@@ -11,7 +11,7 @@ import { deriveAddress, deriveKeypair } from 'ripple-keypairs'
 import { RippleAPI } from 'ripple-lib'
 import { BehaviorSubject, fromEvent } from 'rxjs'
 import { first, map, timeout, startWith } from 'rxjs/operators'
-import { Flavor } from 'types/util'
+import { Flavor } from '../types/util'
 import { LedgerEnv, State } from '..'
 import { isThatCredentialId } from '../credential'
 import { SettlementEngine, SettlementEngineType } from '../engine'
@@ -65,7 +65,9 @@ const setupEngine = async (
         'Kava Labs': (token: string) =>
           `btp+wss://:${token}@test.ilp.kava.io/xrp`
       },
-      mainnet: {}
+      mainnet: {
+        'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/xrp`
+      }
     }[ledgerEnv],
     api
   }

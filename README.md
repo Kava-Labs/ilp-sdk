@@ -14,13 +14,11 @@ In ~20 lines of code,
 - :checkered_flag: **Swap assets in seconds with Interledger**
 - :lock: **Retain full asset custody & securely withdraw funds**
 
----
-
-:rotating_light: **Don't use this with real money, and expect breaking changes while in beta.**
+_(Checkout [Switch](https://github.com/kava-labs/switch), a non-custodial Interledger wallet, for an example of an app built with this SDK!)_
 
 ## Overview
 
-The API is built around the concept of an uplink, which is a relationship with a connector using a particular settlement mechanism. Any number of uplinks can be configured, with different private keys/accounts on the base ledger, connected to different connectors.
+The SDK is built around the concept of an uplink, which is a relationship with a connector, or money router, using a particular settlement mechanism. Any number of uplinks can be configured, with different private keys/accounts on the base ledger, connected to different connectors.
 
 Create different types of uplinks, based upon the settlement mechanism & asset:
 
@@ -30,7 +28,7 @@ Create different types of uplinks, based upon the settlement mechanism & asset:
 | `Machinomy`  | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum |
 | `XrpPaychan` | XRP                      | Native payment channels on the XRP ledger             |
 
-By default, the API connects to the Kava testnet connector; user-defined connectors will be supported in the near future. However, Kava's [connector configuration](https://github.com/kava-labs/connector-config) is open-source, enabling you to run a local connector for development.
+By default, the SDK connects to the Kava testnet connector; user-defined connectors will be supported in the near future. However, Kava's [connector configuration](https://github.com/kava-labs/connector-config) is open-source, enabling you to run a local connector for development.
 
 ## Install
 
@@ -40,29 +38,45 @@ npm i @kava-labs/switch-api
 
 ## Usage
 
-### Connect the API
+### Connect the SDK
 
-Create an instance of the API, which automatically connects to the underlying ledgers. In a future release, this will also load existing state. By default, the API connects to testnet.
+Create an instance of the SDK, which automatically connects to the underlying ledgers on testnet.
 
 ```js
 import { connect, LedgerEnv, SettlementEngineType } from '@kava-labs/switch-api'
 
 // Connect to testnet
-// (State is loaded and persisted to ~/.switch/config.json automatically)
-const api = await connect()
+const sdk = await connect()
 
 // Alternatively, run a local connector using Kava's connector-config
-const api = await connect(LedgerEnv.Local)
+const sdk = await connect(LedgerEnv.Local)
 ```
 
-### Configuration
+### Persistence
+
+The SDK stores a configuration file with all the configured uplinks, credentials, and payment channel claims in the `~/.switch/config.json` (in the user's home directory, depending upon the OS). The config is automatically persisted every 10 seconds, and when `disconnect` is called on the SDK.
+
+By default, the configuration file is stored **unencrypted**.
+
+Optionally (such as if using the SDK with real money on mainnet), the configuration and private keys can be stored encrypted. Simply provide a password to the SDK, and it will encrypt and save the credentials with 256-bit AES-GCM, using Argon2 for high work-factor key derivation:
+
+```js
+// Connect to testnet, and save an encrypted config
+const sdk = await connect(
+  LedgerEnv.Testnet,
+  'some password here'
+)
+```
+
+- The SDK will fail on connect if the password is invalid, or if an encrypted configuration already exists, but no password was provided.
+- Due to the nature of password-based symmetric encryption, if the password is lost or forgotten, the configuration and private keys will be rendered inaccessible.
 
 #### Configure Machinomy
 
-Machinomy uplinks use the Kovan testnet on Ethereum. Kovan ether can be requested from [this faucet](https://faucet.kovan.network/).
+In testnet mode, Machinomy uplinks use the Kovan testnet on Ethereum. Kovan ether can be requested from [this faucet](https://faucet.kovan.network/).
 
 ```js
-const ethUplink = await api.add({
+const ethUplink = await sdk.add({
   settlerType: SettlementEngineType.Machinomy,
   privateKey: '36fa71e0c8b177cc170e06e59abe8c83db1db0bae53a5f89624a891fd3c285a7'
 })
@@ -70,10 +84,10 @@ const ethUplink = await api.add({
 
 #### Configure XRP
 
-To generate a new secret on the XRP testnet (with 10,000 test XRP), use [Ripple's faucet](https://developers.ripple.com/xrp-test-net-faucet.html).
+In testnet mode, XRP uplinks use Ripple's XRP testnet. To generate a new secret on the XRP testnet (with 10,000 test XRP), use [Ripple's faucet](https://developers.ripple.com/xrp-test-net-faucet.html).
 
 ```js
-const xrpUplink = await api.add({
+const xrpUplink = await sdk.add({
   settlerType: SettlementEngineType.XrpPaychan,
   secret: 'ssPr1eagnXCFdD8xJsGXwTBr29pFF'
 })
@@ -81,10 +95,10 @@ const xrpUplink = await api.add({
 
 #### Configure Lightning
 
-Lightning uplinks require an LND node connected to the Bitcoin testnet, with a base64-encoded macaroon and TLS certificate.
+Lightning uplinks require an LND node connected to the Bitcoin mainnet or testnet (depending upon which environment the SDK is configured for). They also require a base64-encoded macaroon and base64-encoded TLS certificate to connect to the LND node over gRPC. (Optionally, provide a `grpcPort` if the LND node is configured to use a non-default port).
 
 ```js
-const btcUplink = await api.add({
+const btcUplink = await sdk.add({
   settlerType: SettlementEngineType.Lnd,
   hostname: 'localhost',
   macaroon:
@@ -100,11 +114,11 @@ Depositing to an uplink involves moving funds from the base layer to the layer 2
 
 The behavior is slightly different depending upon the type of settlement.
 
-- **Lightning**: no-operation. (The configured Lightning node must already have connectivity to the greater Lightning network. Although a direct channel or channel closer in proximity to the connector provides a better experience, opening those channels is currently out of the scope of this API).
-- **Machinomy & XRP**: If no channel is open, funds a new payment channel to the connctor and requests an incoming channel. If there's already an existing outgoing channel, it will deposit additional funds to that channel. The API will calculate the precise fee and invoke a callback to approve it before submitting the on-chain transaction.
+- **Lightning**: no-operation. (The configured Lightning node must already have connectivity to the greater Lightning network. Although a direct channel or channel closer in proximity to the connector provides a better experience, opening those channels is currently out of the scope of this SDK).
+- **Machinomy & XRP**: If no channel is open, funds a new payment channel to the connctor and requests an incoming channel. If there's already an existing outgoing channel, it will deposit additional funds to that channel. The SDK will calculate the precise fee and invoke a callback to approve it before submitting the on-chain transaction.
 
 ```typescript
-await api.deposit({
+await sdk.deposit({
   /** Uplink to deposit to */
   uplink: ethUplink,
 
@@ -126,7 +140,7 @@ await api.deposit({
 
 ### Balances
 
-The API is designed to precisely report balances and incoming/outgoing capacity in realtime, including while performing a streaming exchange.
+The SDK is designed to precisely report balances and incoming/outgoing capacity in realtime, including while performing a streaming exchange.
 
 Each uplink exposes several RxJS observables as properties that emit amounts denominated in the unit of exchange (e.g. BTC, ETH, XRP) of that uplink.
 
@@ -136,7 +150,7 @@ Each uplink exposes several RxJS observables as properties that emit amounts den
 
 Emits the total balance in layer 2 that can be claimed on the base ledger if the client tried to withdraw funds at that moment (the amount in the client's custody).
 
-- **Lightning**: the total balance of all channels on the Lightning node. This is refreshed at a regular interval if Lightning payments are sent/received outside of the API. (Note: when streaming payments, although there is a minor latency for Lightning balance updates to be reflected, the trust limits are still strictly enforced internally.)
+- **Lightning**: the total balance of all channels on the Lightning node. This is refreshed at a regular interval if Lightning payments are sent/received outside of the SDK. (Note: when streaming payments, although there is a minor latency for Lightning balance updates to be reflected, the trust limits are still strictly enforced internally.)
 - **Machinomy & XRP**: the balance is the remaining (unspent) capacity in the outgoing payment channel, plus the total amount received in the incoming payment channel.
 
 ```js
@@ -147,7 +161,7 @@ ethUplink.balance$.subscribe(amount => {
 
 ### Trade (switch!)
 
-At it's core, the API enables streaming exchanges between assets with very limited counterparty risk.
+At it's core, the SDK enables streaming exchanges between assets with very limited counterparty risk.
 
 #### Non-custodial Trading
 
@@ -175,7 +189,7 @@ Here are some unscientific benchmarks in optimal conditions to send \$2 of the s
 - These were taken from [this test in CircleCI](https://circleci.com/gh/Kava-Labs/ilp-sdk/3) (likely hosted in AWS) using Kava's testnet connector (hosted in AWS). Your mileage may vary. However, for peers _very_ close in proximity to one another, the results are remarkable.
 - \$0.05 was the amount prefunded/trust limit, so ~40 packets/roundtrips were required for each payment
 
-The key metric is "value per second," or if you only trust your peer for _x_, how much money can you move in one second? In the case of the XRP/ETH pairs, sometimes as high as **200 times** your trust limit can be transferred, _per second_. Under real world conditions, that's likely hard to attain, but with a very low-latency internet connection, several dozen times the trust limit per second is possible.
+The key metric is "value per second," or if you only trust your peer for _x_, how much money can you move in one second? In the case of the XRP/ETH pairs, sometimes as high as **200 times** your trust limit can be transferred, _per second_. Under real world conditions, that's likely hard to attain, but with a very low-latency internet connection, a few dozen times the trust limit per second is possible.
 
 The bottom line: the latency of settlements is critical in how long a payment takes. In the case of ETH and XRP, the latency is the time it takes to send a message to the peer. In the case of Lightning, individual settlements take longer so the entire payment takes longer: they involve the latency from the sender, to their LND node (likely remote), over some number of hops in the Lightning network (which can be quite slow), to the peer's LND node, to the peer's connector. If there are intermediary hops in Interledger, it may also take longer, although they likely wouldn't be limited by the speed of settlements, since the service providers in the middle likely have higher trust between one another.
 
@@ -184,7 +198,7 @@ The bottom line: the latency of settlements is critical in how long a payment ta
 #### Example
 
 ```js
-await api.streamMoney({
+await sdk.streamMoney({
   /** Amount to send in units of exchange of the source uplink */
   amount: new BigNumber(0.02),
 
@@ -204,7 +218,7 @@ await api.streamMoney({
 Withdrawing from an uplink moves all funds from layer 2 back to the base layer. An uplink can no longer be used after funds are withdrawn and should be removed.
 
 ```typescript
-await api.withdraw({
+await sdk.withdraw({
   /** Uplink to withdraw from */
   uplink: ethUplink,
 
@@ -217,28 +231,32 @@ await api.withdraw({
   }
 })
 
-await api.remove(ethUplink)
+await sdk.remove(ethUplink)
 ```
 
 ### Disconnect
 
-Gracefully disconnect the API to end the session:
+Gracefully disconnect the SDK to end the session and save the latest state and payment channel claims (important):
 
 ```js
-await api.disconnect()
+await sdk.disconnect()
 ```
 
 ## Known Issues
 
-- Persisted private keys, secrets and other data is currently stored **unencrypted**.
 - By design, clients do not currently pay for incoming capacity on ETH nor XRP. However, that's not a sustainable solution. In order to scale and prevent liquidity denial of service attacks, clients should pay a fee to "buy" incoming capacity/bandwidth for a period of time. However, this negotiation and accounting adds a great deal of complexity.
 - Uplinks don't operate an internal `ilp-connector`, which may introduce some minor security risks. We intend to update this after the internal plugin architecture is refactored.
-- Machinomy payment channels don't currently support watchtowers, which can become a security risk if a client is offline for an extended period of time and the connector disputes the channel. (In XRP, this is less of an issue, since the on-chain fees are low enough that regular checkpoints of the latest claim can be submitted to the ledger).
-- The speed of Lightning settlements degrades significantly as the number of hops increases, and even with a direct channel between peers, is currently much slower than XRP or ETH. We can make some optimizations (albeit minor) to improve this.
+- Machinomy nor XRP payment channels don't currently support external watchtowers, which can become a security risk if a client is offline for an extended period of time and the connector disputes the channel.
+- The speed of Lightning settlements degrades significantly as the number of hops increases, and is currently much slower than XRP or ETH. Functionality to open a direct channel with the peered connector could help improve this.
 
 ## Roadmap
 
-- [ ] Encryption of stored credentials
+- [x] ETH, XRP and Lightning support
+- [x] Fast and secure streaming exchanges
+- [x] Support for Electron
+- [x] Persistence of uplink configurations
+- [x] Encryption of stored credentials
+- [ ] Mainnet release
 - [ ] Internal refactoring/improving code quality
 - [ ] Support for user-defined connectors
 - [ ] Additional assets, including ERC-20 tokens such as DAI

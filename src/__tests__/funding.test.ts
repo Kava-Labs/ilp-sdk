@@ -3,12 +3,12 @@ import anyTest, { ExecutionContext, TestInterface } from 'ava'
 import BigNumber from 'bignumber.js'
 import { unlink } from 'fs'
 import { promisify } from 'util'
-import { connect, LedgerEnv, ReadyUplinks, SwitchApi } from '..'
+import { connect, LedgerEnv, ReadyUplinks, IlpSdk } from '..'
 import { CONFIG_PATH } from '../config'
 import { addEth, addXrp, captureFeesFrom } from './helpers'
 require('envkey')
 
-const test = anyTest as TestInterface<SwitchApi>
+const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 
@@ -22,8 +22,8 @@ test.afterEach(async t => t.context.disconnect())
 
 // Helper to test deposit and withdraw on uplinks
 export const testFunding = (
-  createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
-) => async (t: ExecutionContext<SwitchApi>) => {
+  createUplink: (api: IlpSdk) => Promise<ReadyUplinks>
+) => async (t: ExecutionContext<IlpSdk>) => {
   // SETUP ------------------------------------------
 
   const { state, deposit, withdraw, streamMoney, getBaseBalance } = t.context

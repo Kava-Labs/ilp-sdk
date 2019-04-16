@@ -4,31 +4,57 @@ import { BaseUplinkConfig } from './uplink'
 import { open, readFile, writeFile, mkdir, ftruncate } from 'fs'
 import { promisify } from 'util'
 import { homedir } from 'os'
-// import { hash, verify, argon2id } from 'argon2'
-// import { randomBytes, createCipheriv } from 'crypto'
-
-// TODO Basic versioning?
-// TODO Use ConfigSchema[] to enable testnet + mainnet configs?
+import { generateEncryptionKey, decrypt } from 'symmetric-encrypt'
 
 export interface ConfigSchema {
-  readonly ledgerEnv: LedgerEnv
   readonly credentials: CredentialConfigs[]
   readonly uplinks: BaseUplinkConfig[]
+}
+
+export type MultiConfigSchema = {
+  readonly [LedgerEnv.Mainnet]?: ConfigSchema
+  readonly [LedgerEnv.Testnet]?: ConfigSchema
+  readonly [LedgerEnv.Local]?: ConfigSchema
 }
 
 const CONFIG_DIR = `${homedir()}/.switch`
 export const CONFIG_PATH = `${CONFIG_DIR}/config.json`
 
-export const serializeConfig = (state: State) =>
-  JSON.stringify({
-    ledgerEnv: state.ledgerEnv,
-    uplinks: state.uplinks.map(uplink => uplink.config),
-    credentials: state.credentials.map(credentialToConfig)
-  })
+export const loadConfig = async (
+  password?: string
+): Promise<[number, MultiConfigSchema]> => {
+  const [descriptor, contents] = await loadFile()
 
-export const persistConfig = async (fileDescriptor: number, state: State) => {
-  await promisify(ftruncate)(fileDescriptor) // r+ mode doesn't overwrite, so first delete file contents
-  await promisify(writeFile)(fileDescriptor, serializeConfig(state))
+  // TODO Add stronger schema validation!
+
+  if (contents.length === 0) {
+    return [descriptor, {}]
+  }
+
+  const parsed = JSON.parse(contents)
+
+  // Handle v0.3-0.4 configs, supporting only a single environment
+  if (parsed.ledgerEnv) {
+    return [
+      descriptor,
+      {
+        [parsed.ledgerEnv]: parsed
+      }
+    ]
+  }
+  // Handle encrypted, multi-environment configs
+  else if (parsed.ciphertext) {
+    if (!password) {
+      throw new Error('Config requires a password to decrypt')
+    }
+
+    const decrypted = await decrypt(password, parsed)
+    return [descriptor, JSON.parse(decrypted)]
+  }
+  // Handle unencrypted, multi-environment configs
+  else {
+    return [descriptor, parsed]
+  }
 }
 
 /**
@@ -38,9 +64,7 @@ export const persistConfig = async (fileDescriptor: number, state: State) => {
  * - Opening the file in "r+" mode allows reading and writing, but fails if the file doesn't
  *   exist (race condition). More importantly, it doesn't allow truncating/deleting the file
  */
-export const loadConfig = async (): Promise<
-  [number, ConfigSchema | undefined]
-> => {
+export const loadFile = async (): Promise<[number, string]> => {
   await promisify(mkdir)(CONFIG_DIR).catch(err => {
     if (err.code === 'EEXIST') return
     else throw err
@@ -58,59 +82,28 @@ export const loadConfig = async (): Promise<
     encoding: 'utf8'
   })
 
-  // TODO Add *robust* schema validation
-  return [
-    fileDescriptor,
-    content.length === 0 ? undefined : JSON.parse(content)
-  ]
+  return [fileDescriptor, content]
 }
 
-/**
- * ------------------------------------
- * ENCRYPTION
- * ------------------------------------
- */
-
-/*
-const ENCRYPTION_ALGORITHM = 'aes-256-gcm'
-const ENCRYPTION_ENCODING = 'utf-8'
-
-const IV_LENGTH = 12
-const AUTH_TAG_LENGTH = 16
-
-const createOutput = async (
-  plaintext: string,
-  salt: string,
-  iv: string
-) => ({
-  // TODO Should this also include algorithm-related info? argon2id, iteration count, etc?
-
-  salt,
-  iv: (await generateSalt()).toString(),
-  ciphertext: (await encryptConfig(plaintext)).toString()
+export const serializeConfig = (state: State) => ({
+  [state.ledgerEnv]: {
+    uplinks: state.uplinks.map(uplink => uplink.config),
+    credentials: state.credentials.map(credentialToConfig)
+  }
 })
 
-// TODO the salt should be passed in here
-const encryptConfig = async (config: string): Promise<Buffer> => {
-  const encryptionKey = await deriveEncryptionKey(password, salt)
+export const prepareEncryption = async (
+  fileDescriptor: number,
+  password?: string
+): Promise<(contents: string) => Promise<void>> => {
+  const encrypt = password ? await generateEncryptionKey(password) : undefined
 
-  const iv = await randomBytes(IV_LENGTH)
-  const cipher = createCipheriv(ENCRYPTION_ALGORITHM, encryptionKey, iv)
-  const ciphertext = cipher.update(Buffer.from(config))
-  return Buffer.concat([ciphertext, cipher.final()])
+  return async (contents: string) => {
+    const parsedContents = encrypt
+      ? JSON.stringify(await encrypt(contents))
+      : contents
+
+    await promisify(ftruncate)(fileDescriptor) // r+ mode doesn't overwrite, so first delete file contents
+    await promisify(writeFile)(fileDescriptor, parsedContents)
+  }
 }
-
-const decryptConfig = async (ciperText: string) => {}
-
-// TODO Salt should be created separately
-const deriveEncryptionKey = async (
-  password: string,
-  salt?: string
-): Promise<string> =>
-  hash(password, {
-    type: argon2id,
-    salt: salt ? Buffer.from(salt, 'hex') : await generateSalt()
-  })
-
-const generateSalt = (): Promise<Buffer> => promisify(randomBytes)(16)
-*/

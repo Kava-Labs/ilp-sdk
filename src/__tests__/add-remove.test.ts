@@ -4,7 +4,7 @@ import {
   LedgerEnv,
   ReadyUplinks,
   SettlementEngineType,
-  SwitchApi
+  IlpSdk
 } from '..'
 import { addBtc, addEth, addXrp } from './helpers'
 import { promisify } from 'util'
@@ -12,7 +12,7 @@ import { unlink } from 'fs'
 import { CONFIG_PATH } from '../config'
 require('envkey')
 
-const test = anyTest as TestInterface<SwitchApi>
+const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 
@@ -26,8 +26,8 @@ test.afterEach(async t => t.context.disconnect())
 
 // Test adding and removing uplinks
 const testAddRemove = (
-  createUplink: (api: SwitchApi) => Promise<ReadyUplinks>
-) => async (t: ExecutionContext<SwitchApi>) => {
+  createUplink: (api: IlpSdk) => Promise<ReadyUplinks>
+) => async (t: ExecutionContext<IlpSdk>) => {
   const uplink = await createUplink(t.context)
   t.true(t.context.state.uplinks.includes(uplink))
 
