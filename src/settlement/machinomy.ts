@@ -255,17 +255,18 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
   let claimChannel: Promise<any>
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
-    claimChannel = uplink.pluginAccount.claimIfProfitable(
-      false,
-      async (channel, fee) => {
+    claimChannel = uplink.pluginAccount
+      .claimIfProfitable(false, async (channel, fee) => {
         await authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(wei(channel.spent), eth())
           ),
           fee: convert(wei(fee), eth())
         }).then(resolve, reject)
-      }
-    )
+      })
+      // If `authorize` is never called/fee calculation fails,
+      // also reject isAuthorized
+      .then(reject, reject)
   })
 
   // TODO This won't reject if the withdraw fails!

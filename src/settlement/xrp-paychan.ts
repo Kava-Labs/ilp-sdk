@@ -25,8 +25,6 @@ import {
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
 
-const log = createLogger('switch-api:xrp-paychan')
-
 /**
  * ------------------------------------
  * SETTLEMENT ENGINE
@@ -299,10 +297,10 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
           value: uplink.outgoingCapacity$.value.plus(
             convert(drop(channel.spent), xrp())
           ),
-          fee: convert(drop(fee), xrp())
+          fee
         }).then(resolve, reject)
       })
-      // If for `authorize` is never called/fee calculation fails,
+      // If `authorize` is never called/fee calculation fails,
       // also reject isAuthorized
       .then(reject, reject)
   })
