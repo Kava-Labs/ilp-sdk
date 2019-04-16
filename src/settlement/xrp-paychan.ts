@@ -289,23 +289,33 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
 const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
   authorize: AuthorizeWithdrawal
 ) => {
-  const claimChannel = uplink.pluginAccount.claimChannel(
-    false,
-    async (channel, fee) => {
-      await authorize({
-        value: uplink.outgoingCapacity$.value.plus(
-          convert(drop(channel.spent), xrp())
-        ),
-        fee
+  /* tslint:disable-next-line:no-let */
+  let claimChannel: Promise<any>
+
+  const isAuthorized = new Promise<any>((resolve, reject) => {
+    claimChannel = uplink.pluginAccount
+      .claimChannel(false, async (channel, fee) => {
+        await authorize({
+          value: uplink.outgoingCapacity$.value.plus(
+            convert(drop(channel.spent), xrp())
+          ),
+          fee: convert(drop(fee), xrp())
+        }).then(resolve, reject)
       })
-    }
-  )
+      // If for `authorize` is never called/fee calculation fails,
+      // also reject isAuthorized
+      .then(reject, reject)
+  })
 
   // TODO This won't reject if the withdraw fails!
-  const requestClose = uplink.pluginAccount.requestClose()
+  // Only request the peer to the close if the withdraw is authorized first
+  const requestClose = isAuthorized.then(() =>
+    uplink.pluginAccount.requestClose()
+  )
 
   // Simultaneously withdraw and request incoming capacity to be removed
-  await Promise.all([claimChannel, requestClose])
+  /* tslint:disable-next-line:no-unnecessary-type-assertion */
+  await Promise.all([claimChannel!, requestClose])
 
   // TODO Confirm the incoming capacity has been closed -- or attempt to dispute it?
 }
