@@ -45,14 +45,17 @@ Create an instance of the SDK, which automatically connects to the underlying le
 ```js
 import { connect, LedgerEnv, SettlementEngineType } from '@kava-labs/switch-api'
 
-// Connect to testnet
+// Connect on testnet
 const sdk = await connect()
+
+// Connect on mainnet
+const sdk = await connect(LedgerEnv.Mainnet)
 
 // Alternatively, run a local connector using Kava's connector-config
 const sdk = await connect(LedgerEnv.Local)
 ```
 
-### Persistence
+#### Persistence
 
 The SDK stores a configuration file with all the configured uplinks, credentials, and payment channel claims in the `~/.switch/config.json` (in the user's home directory, depending upon the OS). The config is automatically persisted every 10 seconds, and when `disconnect` is called on the SDK.
 
@@ -256,7 +259,7 @@ await sdk.disconnect()
 - [x] Support for Electron
 - [x] Persistence of uplink configurations
 - [x] Encryption of stored credentials
-- [ ] Mainnet release
+- [x] Mainnet release
 - [ ] Internal refactoring/improving code quality
 - [ ] Support for user-defined connectors
 - [ ] Additional assets, including ERC-20 tokens such as DAI
