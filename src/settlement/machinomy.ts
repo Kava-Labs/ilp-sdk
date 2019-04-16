@@ -256,13 +256,17 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
     claimChannel = uplink.pluginAccount
-      .claimIfProfitable(false, async (channel, fee) => {
-        await authorize({
+      .claimIfProfitable(false, (channel, fee) => {
+        const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(wei(channel.spent), eth())
           ),
           fee: convert(wei(fee), eth())
-        }).then(resolve, reject)
+        })
+
+        internalAuthorize.then(resolve, reject)
+
+        return internalAuthorize
       })
       // If `authorize` is never called/fee calculation fails,
       // also reject isAuthorized

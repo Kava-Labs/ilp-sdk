@@ -292,13 +292,17 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
     claimChannel = uplink.pluginAccount
-      .claimChannel(false, async (channel, fee) => {
-        await authorize({
+      .claimChannel(false, (channel, fee) => {
+        const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(drop(channel.spent), xrp())
           ),
           fee
-        }).then(resolve, reject)
+        })
+
+        internalAuthorize.then(resolve, reject)
+
+        return internalAuthorize
       })
       // If `authorize` is never called/fee calculation fails,
       // also reject isAuthorized
