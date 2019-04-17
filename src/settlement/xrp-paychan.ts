@@ -292,7 +292,10 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
   let claimChannel: Promise<any>
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
-    const authorizeOnlyOutgoing = () =>
+    /* tslint:disable-next-line:no-let */
+    let claimChannelAuthReady = false
+    const authorizeOnlyOutgoing = async () =>
+      !claimChannelAuthReady &&
       authorize({
         value: uplink.outgoingCapacity$.value,
         fee: new BigNumber(0)
@@ -300,6 +303,7 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
 
     claimChannel = uplink.pluginAccount
       .claimChannel(false, (channel, fee) => {
+        claimChannelAuthReady = true
         const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(drop(channel.spent), xrp())

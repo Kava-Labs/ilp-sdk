@@ -256,7 +256,10 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
   let claimChannel: Promise<any>
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
-    const authorizeOnlyOutgoing = () =>
+    /* tslint:disable-next-line:no-let */
+    let claimChannelAuthReady = false
+    const authorizeOnlyOutgoing = async () =>
+      !claimChannelAuthReady &&
       authorize({
         value: uplink.outgoingCapacity$.value,
         fee: new BigNumber(0)
@@ -264,6 +267,7 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
 
     claimChannel = uplink.pluginAccount
       .claimIfProfitable(false, (channel, fee) => {
+        claimChannelAuthReady = true
         const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(wei(channel.spent), eth())
