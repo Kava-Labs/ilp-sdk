@@ -284,6 +284,7 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
     .toPromise()
 }
 
+// TODO Move some of this into generic uplink code?
 const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
   authorize: AuthorizeWithdrawal
 ) => {
@@ -291,6 +292,12 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
   let claimChannel: Promise<any>
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
+    const authorizeOnlyOutgoing = () =>
+      authorize({
+        value: uplink.outgoingCapacity$.value,
+        fee: new BigNumber(0)
+      }).then(resolve, reject)
+
     claimChannel = uplink.pluginAccount
       .claimChannel(false, (channel, fee) => {
         const internalAuthorize = authorize({
@@ -304,9 +311,10 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
 
         return internalAuthorize
       })
-      // If `authorize` is never called/fee calculation fails,
-      // also reject isAuthorized
-      .then(reject, reject)
+      // If `authorize` was never called to claim the channel,
+      // call `authorize` again, but this time only to request the outgoing channel to be closed
+      // (this prevents deadlocks if for some reason the incoming channel was already closed)
+      .then(authorizeOnlyOutgoing, authorizeOnlyOutgoing)
   })
 
   // TODO This won't reject if the withdraw fails!
