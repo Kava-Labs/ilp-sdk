@@ -40,12 +40,12 @@ npm i @kava-labs/switch-api
 
 ### Connect the SDK
 
-Create an instance of the SDK, which automatically connects to the underlying ledgers on testnet.
+Create an instance of the SDK, which automatically connects to the underlying ledgers.
 
 ```js
 import { connect, LedgerEnv, SettlementEngineType } from '@kava-labs/switch-api'
 
-// Connect on testnet
+// Connect on testnet (default)
 const sdk = await connect()
 
 // Connect on mainnet
