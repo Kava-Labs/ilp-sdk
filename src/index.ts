@@ -155,7 +155,15 @@ export const connect = async (
   }) => {
     const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
     const internalWithdraw = withdrawFromUplink(internalUplink)
-    return internalWithdraw && internalWithdraw(authorize)
+    if (internalWithdraw) {
+      const checkWithdraw = () =>
+        internalUplink.totalReceived$.value.isZero() &&
+        internalUplink.totalSent$.value.isZero()
+          ? Promise.resolve()
+          : Promise.reject()
+
+      return internalWithdraw(authorize).then(checkWithdraw, checkWithdraw)
+    }
   }
 
   // TODO Create a composite "id" for uplinks based on serverUri, settlerType & credentialId?

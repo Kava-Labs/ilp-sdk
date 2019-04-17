@@ -248,6 +248,7 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
     .toPromise()
 }
 
+// TODO Move this code into generic "uplink" code?
 const withdraw = (uplink: ReadyMachinomyUplink) => async (
   authorize: AuthorizeWithdrawal
 ) => {
@@ -255,8 +256,18 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
   let claimChannel: Promise<any>
 
   const isAuthorized = new Promise<any>((resolve, reject) => {
+    /* tslint:disable-next-line:no-let */
+    let claimChannelAuthReady = false
+    const authorizeOnlyOutgoing = async () =>
+      !claimChannelAuthReady &&
+      authorize({
+        value: uplink.outgoingCapacity$.value,
+        fee: new BigNumber(0)
+      }).then(resolve, reject)
+
     claimChannel = uplink.pluginAccount
       .claimIfProfitable(false, (channel, fee) => {
+        claimChannelAuthReady = true
         const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
             convert(wei(channel.spent), eth())
@@ -268,9 +279,10 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
 
         return internalAuthorize
       })
-      // If `authorize` is never called/fee calculation fails,
-      // also reject isAuthorized
-      .then(reject, reject)
+      // If `authorize` was never called to claim the channel,
+      // call `authorize` again, but this time only to request the outgoing channel to be closed
+      // (this prevents deadlocks if for some reason the incoming channel was already closed)
+      .then(authorizeOnlyOutgoing, authorizeOnlyOutgoing)
   })
 
   // TODO This won't reject if the withdraw fails!
