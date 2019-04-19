@@ -10,10 +10,9 @@ import {
 import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
-import { APPLICATION_ERROR } from '../utils/packet'
 import { State } from '..'
 
-const log = createLogger('switch-api:stream')
+const log = createLogger('ilp-sdk:stream')
 
 BigNumber.config({ EXPONENTIAL_AT: 1e9 }) // Almost never use exponential notation
 
