@@ -133,7 +133,7 @@ export const streamMoney = (state: State) => async ({
       sourceSettler.baseUnit(remainingAmount),
       sourceSettler.exchangeUnit()
     )
-    if (remainingToSend.gt(availableToSend)) {
+    if (remainingToSend.isGreaterThan(availableToSend)) {
       log.error(
         `stream failed: insufficient outgoing capacity to fulfill remaining amount of ${format(
           remainingAmount
@@ -142,13 +142,17 @@ export const streamMoney = (state: State) => async ({
       return Promise.reject()
     }
 
-    const availableToReceive = dest.availableToReceive$.getValue()
+    // Subtract slippage from incoming capacity in case exchange rate flows in our favor while the swap is in progress
+    // (so it fails immediately, rather than midway through)
+    const availableToReceive = dest.availableToReceive$.value.times(
+      new BigNumber(1).minus(slippage)
+    )
     const remainingToReceive = convert(
       sourceSettler.baseUnit(remainingAmount),
       destSettler.exchangeUnit(),
       state.rateBackend
     )
-    if (remainingToReceive.gt(availableToReceive)) {
+    if (remainingToReceive.isGreaterThan(availableToReceive)) {
       log.error(
         `stream failed: insufficient incoming capacity to fulfill remaining amount of ${format(
           remainingAmount
@@ -185,7 +189,7 @@ export const streamMoney = (state: State) => async ({
       sourceAmount: BigNumber.Value,
       destAmount: BigNumber.Value
     ) =>
-      new BigNumber(destAmount).gte(
+      new BigNumber(destAmount).isGreaterThanOrEqualTo(
         convert(
           sourceSettler.baseUnit(sourceAmount),
           destSettler.baseUnit(),
@@ -200,10 +204,21 @@ export const streamMoney = (state: State) => async ({
 
     registerPacketHandler(
       async ({ executionCondition: someCondition, amount: destAmount }) =>
-        acceptExchangeRate(packetAmount, destAmount) && // TODO Respond with F04: insufficient destination amount instead?
-        correctCondition(someCondition) // TODO Respond with F06: unexpected payment instead?
-          ? fulfillPacket
-          : APPLICATION_ERROR
+        !acceptExchangeRate(packetAmount, destAmount)
+          ? {
+              code: 'F04', // Insufficient destination amount
+              message: 'Poor exchange rate',
+              triggeredBy: dest.clientAddress,
+              data: Buffer.alloc(0)
+            }
+          : !correctCondition(someCondition)
+          ? {
+              code: 'F06', // Unexpected payment
+              message: 'Unexpected payment',
+              triggeredBy: dest.clientAddress,
+              data: Buffer.alloc(0)
+            }
+          : fulfillPacket
     )(dest)
 
     log.debug(`sending packet ${packetNum} for ${packetAmount}`)
