@@ -14,12 +14,7 @@ import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
-import {
-  ReadyCredentials,
-  getCredential,
-  getCredentialId,
-  closeCredential
-} from './credential'
+import { ReadyCredentials, getCredential, getCredentialId } from './credential'
 import { SettlementEngine, SettlementEngineType } from './engine'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
 import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
@@ -31,7 +26,7 @@ import { SimpleStore, MemoryStore } from './utils/store'
 import { PluginWrapper } from './utils/middlewares'
 import { generateSecret, generateToken } from './utils/crypto'
 
-const log = createLogger('switch-api:uplink')
+const log = createLogger('ilp-sdk:uplink')
 
 /** TODO The config to export should be *re-generated* each time by an uplink */
 
@@ -205,7 +200,7 @@ export const connectUplink = (state: State) => (
     maxPacketAmount: maxInFlight,
     assetCode: settler.assetCode,
     assetScale: settler.assetScale,
-    log: createLogger(`switch-api:${settler.assetCode}:balance`),
+    log: createLogger(`ilp-sdk:${settler.assetCode}:balance`),
     store: new MemoryStore(config.plugin.store, 'wrapper')
   })
 
