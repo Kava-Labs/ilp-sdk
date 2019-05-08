@@ -1,9 +1,6 @@
 import anyTest, { TestInterface, ExecutionContext } from 'ava'
 import { IlpSdk, connect, LedgerEnv, ReadyUplinks } from '..'
 import { addEth, addXrp, addBtc, createFundedUplink } from './helpers'
-import { promisify } from 'util'
-import { unlink } from 'fs'
-import { CONFIG_PATH } from '../config'
 import { convert, usd } from '@kava-labs/crypto-rate-utils'
 import { performance } from 'perf_hooks'
 require('envkey')
@@ -12,10 +9,7 @@ const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 
-// TODO Turn this into a generic helper
 test.beforeEach(async t => {
-  // Delete any existing config
-  await promisify(unlink)(CONFIG_PATH).catch(() => Promise.resolve())
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 

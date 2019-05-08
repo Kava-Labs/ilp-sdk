@@ -1,19 +1,14 @@
 import anyTest, { TestInterface } from 'ava'
-import 'envkey'
 import { IlpSdk, connect, LedgerEnv } from '..'
 import { addEth } from './helpers'
 import BigNumber from 'bignumber.js'
-import { promisify } from 'util'
-import { unlink } from 'fs'
-import { CONFIG_PATH } from '../config'
+require('envkey')
 
 const test = anyTest as TestInterface<IlpSdk>
 
 // Before & after each test, construct and disconnect the API
 
 test.beforeEach(async t => {
-  // Delete any existing config
-  await promisify(unlink)(CONFIG_PATH).catch(() => Promise.resolve())
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 

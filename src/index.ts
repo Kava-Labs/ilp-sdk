@@ -7,12 +7,13 @@ import {
 import BigNumber from 'bignumber.js'
 import {
   closeCredential,
-  setupCredential,
   CredentialConfigs,
+  credentialToConfig,
+  getCredential,
   getOrCreateCredential,
   isThatCredentialId,
   ReadyCredentials,
-  getCredential
+  setupCredential
 } from './credential'
 import { closeEngine, SettlementEngineType } from './engine'
 import { streamMoney } from './services/switch'
@@ -25,18 +26,16 @@ import {
 import {
   AuthorizeDeposit,
   AuthorizeWithdrawal,
+  BaseUplinkConfig,
   closeUplink,
+  connectUplink,
   createUplink,
   depositToUplink,
+  getBaseBalance,
   isThatUplink,
   ReadyUplinks,
-  withdrawFromUplink,
-  connectUplink,
-  getBaseBalance
+  withdrawFromUplink
 } from './uplink'
-import { loadConfig, prepareEncryption, serializeConfig } from './config'
-import { close } from 'fs'
-import { promisify } from 'util'
 
 type ThenArg<T> = T extends Promise<infer U> ? U : T
 export type IlpSdk = ThenArg<ReturnType<typeof connect>>
@@ -66,14 +65,15 @@ export interface State {
   uplinks: ReadyUplinks[]
 }
 
-export { CONFIG_PATH } from './config'
+export interface ConfigSchema {
+  readonly credentials: CredentialConfigs[]
+  readonly uplinks: BaseUplinkConfig[]
+}
 
 export const connect = async (
   ledgerEnv: LedgerEnv = LedgerEnv.Testnet,
-  password?: string
+  config?: ConfigSchema
 ) => {
-  const [fileDescriptor, config] = await loadConfig(password)
-
   const state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
@@ -87,16 +87,14 @@ export const connect = async (
     uplinks: []
   }
 
-  // If the config exists for this environment (e.g. testnet, mainnet), load that
-  const envConfig = config[ledgerEnv]
-  if (envConfig) {
+  if (config) {
     state.credentials = await Promise.all<ReadyCredentials>(
-      envConfig.credentials.map(cred => setupCredential(cred)(state))
+      config.credentials.map(cred => setupCredential(cred)(state))
     )
 
     // TODO Handle error cases if the uplinks fail to connect
     state.uplinks = await Promise.all(
-      envConfig.uplinks.map(uplinkConfig => {
+      config.uplinks.map(uplinkConfig => {
         // TODO What if, for some reason, the credential doesn't exist?
         const cred = getCredential(state)(uplinkConfig.credentialId)
         return connectUplink(state)(cred!)(uplinkConfig)
@@ -104,109 +102,96 @@ export const connect = async (
     )
   }
 
-  // Derive the key from the password, so it's cached and ready to persist
-  const persistFile = await prepareEncryption(fileDescriptor, password)
-
-  const persistConfig = () =>
-    persistFile(
-      JSON.stringify({
-        ...config,
-        ...serializeConfig(state)
-      })
-    )
-
-  const saveInterval = setInterval(persistConfig, 10000)
-
-  const add = async (
-    credentialConfig: CredentialConfigs
-  ): Promise<ReadyUplinks> => {
-    const readyCredential = await getOrCreateCredential(state)(credentialConfig)
-    const readyUplink = await createUplink(state)(readyCredential)
-    state.uplinks = [...state.uplinks, readyUplink] // TODO What if the uplink is a duplicate? (throws?)
-    return readyUplink
-  }
-
-  const deposit = async ({
-    uplink,
-    amount,
-    authorize = () => Promise.resolve()
-  }: {
-    readonly uplink: ReadyUplinks
-    readonly amount: BigNumber
-    readonly authorize?: AuthorizeDeposit
-  }): Promise<void> => {
-    const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
-    const internalDeposit = depositToUplink(internalUplink)
-    return (
-      internalDeposit &&
-      internalDeposit(state)({
-        amount,
-        authorize
-      })
-    )
-  }
-
-  const withdraw = async ({
-    uplink,
-    authorize = () => Promise.resolve()
-  }: {
-    readonly uplink: ReadyUplinks
-    readonly authorize?: AuthorizeWithdrawal
-  }) => {
-    const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
-    const internalWithdraw = withdrawFromUplink(internalUplink)
-    if (internalWithdraw) {
-      const checkWithdraw = () =>
-        internalUplink.totalReceived$.value.isZero() &&
-        internalUplink.totalSent$.value.isZero()
-          ? Promise.resolve()
-          : Promise.reject()
-
-      return internalWithdraw(authorize).then(checkWithdraw, checkWithdraw)
-    }
-  }
-
   // TODO Create a composite "id" for uplinks based on serverUri, settlerType & credentialId?
-
-  const remove = async (uplink: ReadyUplinks) => {
-    // Remove the uplink
-    const internalUplink = state.uplinks.find(isThatUplink(uplink))
-    if (!internalUplink) {
-      return
-    }
-    await closeUplink(internalUplink)
-    state.uplinks = state.uplinks.filter(el => !isThatUplink(uplink)(el))
-
-    // Remove the credential
-    const credentialsToClose = state.credentials.filter(
-      isThatCredentialId(internalUplink.credentialId, uplink.settlerType)
-    )
-    await Promise.all(credentialsToClose.map(closeCredential))
-
-    state.credentials = state.credentials.filter(
-      someCredential => !credentialsToClose.includes(someCredential)
-    )
-  }
-
-  const disconnect = async () => {
-    clearInterval(saveInterval)
-    await persistConfig()
-    await Promise.all(state.uplinks.map(closeUplink))
-    await Promise.all(state.credentials.map(closeCredential))
-    await Promise.all(Object.values(state.settlers).map(closeEngine))
-    await promisify(close)(fileDescriptor)
-  }
-
-  // TODO Should disconnecting the API prevent other operations from occuring? (they may not work anyways)
 
   return {
     state,
-    add,
-    deposit,
-    withdraw,
-    remove,
+
+    async add(credentialConfig: CredentialConfigs): Promise<ReadyUplinks> {
+      const readyCredential = await getOrCreateCredential(state)(
+        credentialConfig
+      )
+      const readyUplink = await createUplink(state)(readyCredential)
+      state.uplinks = [...state.uplinks, readyUplink] // TODO What if the uplink is a duplicate? (throws?)
+      return readyUplink
+    },
+
+    async deposit({
+      uplink,
+      amount,
+      authorize = () => Promise.resolve()
+    }: {
+      readonly uplink: ReadyUplinks
+      readonly amount: BigNumber
+      readonly authorize?: AuthorizeDeposit
+    }): Promise<void> {
+      const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
+      const internalDeposit = depositToUplink(internalUplink)
+      return (
+        internalDeposit &&
+        internalDeposit(state)({
+          amount,
+          authorize
+        })
+      )
+    },
+
+    async withdraw({
+      uplink,
+      authorize = () => Promise.resolve()
+    }: {
+      readonly uplink: ReadyUplinks
+      readonly authorize?: AuthorizeWithdrawal
+    }): Promise<void> {
+      const internalUplink = state.uplinks.filter(isThatUplink(uplink))[0]
+      const internalWithdraw = withdrawFromUplink(internalUplink)
+      if (internalWithdraw) {
+        const checkWithdraw = () =>
+          internalUplink.totalReceived$.value.isZero() &&
+          internalUplink.totalSent$.value.isZero()
+            ? Promise.resolve()
+            : Promise.reject()
+
+        return internalWithdraw(authorize).then(checkWithdraw, checkWithdraw)
+      }
+    },
+
+    async remove(uplink: ReadyUplinks): Promise<void> {
+      // Remove the uplink
+      const internalUplink = state.uplinks.find(isThatUplink(uplink))
+      if (!internalUplink) {
+        return
+      }
+      await closeUplink(internalUplink)
+      state.uplinks = state.uplinks.filter(el => !isThatUplink(uplink)(el))
+
+      // Remove the credential
+      const credentialsToClose = state.credentials.filter(
+        isThatCredentialId(internalUplink.credentialId, uplink.settlerType)
+      )
+      await Promise.all(credentialsToClose.map(closeCredential))
+
+      state.credentials = state.credentials.filter(
+        someCredential => !credentialsToClose.includes(someCredential)
+      )
+    },
+
     streamMoney: streamMoney(state),
+
     getBaseBalance: getBaseBalance(state),
-    disconnect
+
+    serializeConfig(): ConfigSchema {
+      return {
+        uplinks: this.state.uplinks.map(uplink => uplink.config),
+        credentials: this.state.credentials.map(credentialToConfig)
+      }
+    },
+
+    // TODO Should disconnecting the API prevent other operations from occuring? (they may not work anyways)
+    async disconnect(): Promise<void> {
+      await Promise.all(state.uplinks.map(closeUplink))
+      await Promise.all(state.credentials.map(closeCredential))
+      await Promise.all(Object.values(state.settlers).map(closeEngine))
+    }
   }
 }

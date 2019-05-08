@@ -14,7 +14,7 @@ In ~20 lines of code,
 - :checkered_flag: **Swap assets in seconds with Interledger**
 - :lock: **Retain full asset custody & securely withdraw funds**
 
-_(Checkout [Switch](https://github.com/kava-labs/switch), a non-custodial Interledger wallet, for an example of an app built with this SDK!)_
+_(Try [Switch](https://github.com/kava-labs/switch), a non-custodial Interledger wallet, for an example of an app built with this SDK!)_
 
 ## Overview
 
@@ -57,22 +57,24 @@ const sdk = await connect(LedgerEnv.Local)
 
 #### Persistence
 
-The SDK stores a configuration file with all the configured uplinks, credentials, and payment channel claims in the `~/.switch/config.json` (in the user's home directory, depending upon the OS). The config is automatically persisted every 10 seconds, and when `disconnect` is called on the SDK.
-
-By default, the configuration file is stored **unencrypted**.
-
-Optionally (such as if using the SDK with real money on mainnet), the configuration and private keys can be stored encrypted. Simply provide a password to the SDK, and it will encrypt and save the credentials with 256-bit AES-GCM, using Argon2 for high work-factor key derivation:
+The SDK can serialize an object with all the configured uplinks, credentials, and payment channel claims like so:
 
 ```js
-// Connect to testnet, and save an encrypted config
+const config = sdk.serializeConfig()
+```
+
+If a persistence layer was implemented on top of the SDK, the consumer could, for example, stringify the config object and persist it to the filesystem.
+
+To load a config object into the SDK, it may optionally be passed on `connect`. For example:
+
+```js
 const sdk = await connect(
-  LedgerEnv.Testnet,
-  'some password here'
+  LedgerEv.Testnet,
+  config
 )
 ```
 
-- The SDK will fail on connect if the password is invalid, or if an encrypted configuration already exists, but no password was provided.
-- Due to the nature of password-based symmetric encryption, if the password is lost or forgotten, the configuration and private keys will be rendered inaccessible.
+Funds may be lost if the configuration is not saved.
 
 #### Configure Machinomy
 
@@ -120,7 +122,7 @@ The behavior is slightly different depending upon the type of settlement.
 - **Lightning**: no-operation. (The configured Lightning node must already have connectivity to the greater Lightning network. Although a direct channel or channel closer in proximity to the connector provides a better experience, opening those channels is currently out of the scope of this SDK).
 - **Machinomy & XRP**: If no channel is open, funds a new payment channel to the connctor and requests an incoming channel. If there's already an existing outgoing channel, it will deposit additional funds to that channel. The SDK will calculate the precise fee and invoke a callback to approve it before submitting the on-chain transaction.
 
-```typescript
+```js
 await sdk.deposit({
   /** Uplink to deposit to */
   uplink: ethUplink,
@@ -132,7 +134,7 @@ await sdk.deposit({
   amount: new BigNumber(0.05),
 
   /** Callback to authorize the fee and amount to be transferred from layer 1, after it's calculated */
-  authorize: (params: { fee: BigNumber; value: BigNumber }): Promise<any> => {
+  authorize: ({ fee, value }) => {
     /**
      * Resolve the promise to continue the deposit,
      * or reject the promise to cancel it
@@ -220,13 +222,13 @@ await sdk.streamMoney({
 
 Withdrawing from an uplink moves all funds from layer 2 back to the base layer. An uplink can no longer be used after funds are withdrawn and should be removed.
 
-```typescript
+```js
 await sdk.withdraw({
   /** Uplink to withdraw from */
   uplink: ethUplink,
 
   /** Callback to authorize the fee and amount to be transferred to layer 1, after it's calculated */
-  authorize: (params: { fee: BigNumber; value: BigNumber }): Promise<any> => {
+  authorize: ({ fee, value }) => {
     /**
      * Resolve the promise to continue the withdrawal,
      * or reject the promise to cancel it
@@ -239,7 +241,7 @@ await sdk.remove(ethUplink)
 
 ### Disconnect
 
-Gracefully disconnect the SDK to end the session and save the latest state and payment channel claims (important):
+Gracefully disconnect the SDK to end the session:
 
 ```js
 await sdk.disconnect()
@@ -257,8 +259,7 @@ await sdk.disconnect()
 - [x] ETH, XRP and Lightning support
 - [x] Fast and secure streaming exchanges
 - [x] Support for Electron
-- [x] Persistence of uplink configurations
-- [x] Encryption of stored credentials
+- [x] Serialize uplink configurations
 - [x] Mainnet release
 - [ ] Internal refactoring/improving code quality
 - [ ] Support for user-defined connectors
