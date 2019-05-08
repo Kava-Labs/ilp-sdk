@@ -208,10 +208,10 @@ export const connectUplink = (state: State) => (
   const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
 
   const balance$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(
+  combineLatest([
     outgoingCapacity$.pipe(distinctBigNum),
     totalReceived$.pipe(distinctBigNum)
-  )
+  ])
     .pipe(sumAll)
     // TODO Try subscribing directly...?
     .subscribe(
@@ -232,25 +232,25 @@ export const connectUplink = (state: State) => (
 
   // Available to receive (ILP packets) = incomingCapacity - credit already extended
   const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(
+  combineLatest([
     incomingCapacity$.pipe(distinctBigNum),
     pluginWrapper.receivableBalance$.pipe(
       distinctBigNum,
       convertToExchangeUnit
     )
-  )
+  ])
     .pipe(subtract)
     .subscribe(availableToReceive$)
 
   // Available to send (ILP packets) = outgoingCapacity + amount prefunded
   const availableToSend$ = new BehaviorSubject(new BigNumber(0))
-  combineLatest(
+  combineLatest([
     outgoingCapacity$.pipe(distinctBigNum),
     pluginWrapper.payableBalance$.pipe(
       distinctBigNum,
       convertToExchangeUnit
     )
-  )
+  ])
     .pipe(subtract)
     .subscribe(availableToSend$)
 
