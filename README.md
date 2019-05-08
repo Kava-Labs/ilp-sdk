@@ -69,7 +69,7 @@ To load a config object into the SDK, it may optionally be passed on `connect`. 
 
 ```js
 const sdk = await connect(
-  LedgerEv.Testnet,
+  LedgerEnv.Testnet,
   config
 )
 ```
@@ -170,7 +170,7 @@ At it's core, the SDK enables streaming exchanges between assets with very limit
 
 #### Non-custodial Trading
 
-When trading between assets, a very small amount of the source/sending asset (the equivalent of \$0.05 USD, by default) is prefunded in advance of the the connector sending the destination/receiving asset. If at any point the connector stops sending or sends too little of the destination asset, the stream is stopped, effectively enabling non-custodial trading, since the counterparty risk can be set arbitrarily low.
+When trading between assets, a very small amount of the source/sending asset (the equivalent of \$0.10 USD, by default) is prefunded in advance of the the connector sending the destination/receiving asset. If at any point the connector stops sending or sends too little of the destination asset, the stream is stopped, effectively enabling non-custodial trading, since the counterparty risk can be set arbitrarily low.
 
 #### Exchange Rates
 

@@ -59,8 +59,7 @@ test('add with invalid xrp secret throws', async t => {
     t.context.add({
       settlerType: SettlementEngineType.XrpPaychan,
       secret: 'this is not a valid xrpSecret' // invalid but correct length
-    }),
-    'Non-base58 character'
+    })
   )
 })
 
@@ -69,8 +68,7 @@ test('add with un-activated xrp secret throws', async t => {
     t.context.add({
       settlerType: SettlementEngineType.XrpPaychan,
       secret: 'sn5s78zYX1i9mzFmd8jXooDFYgfj2' // un-activated but valid secret
-    }),
-    'actNotFound'
+    })
   )
 })
 
