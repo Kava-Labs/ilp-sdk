@@ -10,19 +10,22 @@ test('rebuilds sdk from a serialized config', async t => {
   )
   await sdk.disconnect()
 
-  const initialSerializedConfig = JSON.stringify(sdk.serializeConfig())
+  const initialSerializedConfig = sdk.serializeConfig()
 
   // Reconnect the API
-  const newSdk = await connect(process.env.LEDGER_ENV as LedgerEnv)
+  const newSdk = await connect(
+    process.env.LEDGER_ENV as LedgerEnv,
+    initialSerializedConfig
+  )
   t.is(newSdk.state.credentials.length, 3, 'same number of credentials')
   t.is(newSdk.state.uplinks.length, 3, 'same number of uplink')
   await newSdk.disconnect()
 
-  const rebuiltSerializedConfig = JSON.stringify(newSdk.serializeConfig())
+  const rebuiltSerializedConfig = newSdk.serializeConfig()
 
   t.is(
-    rebuiltSerializedConfig,
-    initialSerializedConfig,
+    JSON.stringify(rebuiltSerializedConfig),
+    JSON.stringify(initialSerializedConfig),
     'config is persisted and can be rebuilt from the persisted version'
   )
 })
