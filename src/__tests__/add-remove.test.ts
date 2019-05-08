@@ -7,9 +7,6 @@ import {
   IlpSdk
 } from '..'
 import { addBtc, addEth, addXrp } from './helpers'
-import { promisify } from 'util'
-import { unlink } from 'fs'
-import { CONFIG_PATH } from '../config'
 require('envkey')
 
 const test = anyTest as TestInterface<IlpSdk>
@@ -17,8 +14,6 @@ const test = anyTest as TestInterface<IlpSdk>
 // Before & after each test, construct and disconnect the API
 
 test.beforeEach(async t => {
-  // Delete any existing config
-  await promisify(unlink)(CONFIG_PATH).catch(() => Promise.resolve())
   t.context = await connect(process.env.LEDGER_ENV! as LedgerEnv)
 })
 
@@ -64,8 +59,7 @@ test('add with invalid xrp secret throws', async t => {
     t.context.add({
       settlerType: SettlementEngineType.XrpPaychan,
       secret: 'this is not a valid xrpSecret' // invalid but correct length
-    }),
-    'Non-base58 character'
+    })
   )
 })
 
@@ -74,8 +68,7 @@ test('add with un-activated xrp secret throws', async t => {
     t.context.add({
       settlerType: SettlementEngineType.XrpPaychan,
       secret: 'sn5s78zYX1i9mzFmd8jXooDFYgfj2' // un-activated but valid secret
-    }),
-    'actNotFound'
+    })
   )
 })
 
