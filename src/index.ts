@@ -66,13 +66,24 @@ export interface State {
 }
 
 export interface ConfigSchema {
+  readonly ledgerEnv?: LedgerEnv
   readonly credentials: CredentialConfigs[]
   readonly uplinks: BaseUplinkConfig[]
 }
 
+export type MultiConfigSchema = {
+  readonly [LedgerEnv.Mainnet]?: ConfigSchema
+  readonly [LedgerEnv.Testnet]?: ConfigSchema
+  readonly [LedgerEnv.Local]?: ConfigSchema
+}
+
+const isMultiConfig = (
+  o: MultiConfigSchema | ConfigSchema
+): o is MultiConfigSchema => !('credentials' in o) && !('uplinks' in o)
+
 export const connect = async (
   ledgerEnv: LedgerEnv = LedgerEnv.Testnet,
-  config?: ConfigSchema
+  config: MultiConfigSchema | ConfigSchema = {}
 ) => {
   const state: State = {
     ledgerEnv,
@@ -87,14 +98,24 @@ export const connect = async (
     uplinks: []
   }
 
-  if (config) {
+  // If the provided config is older (not multi-environment), convert it to a multi-environment config
+  const baseConfig = isMultiConfig(config)
+    ? config
+    : {
+        [config.ledgerEnv || ledgerEnv]: config
+      }
+
+  /** Configuration for the environment of this instance (testnet, mainnet, etc) */
+  const envConfig = baseConfig[ledgerEnv]
+
+  if (envConfig) {
     state.credentials = await Promise.all<ReadyCredentials>(
-      config.credentials.map(cred => setupCredential(cred)(state))
+      envConfig.credentials.map(cred => setupCredential(cred)(state))
     )
 
     // TODO Handle error cases if the uplinks fail to connect
     state.uplinks = await Promise.all(
-      config.uplinks.map(uplinkConfig => {
+      envConfig.uplinks.map(uplinkConfig => {
         // TODO What if, for some reason, the credential doesn't exist?
         const cred = getCredential(state)(uplinkConfig.credentialId)
         return connectUplink(state)(cred!)(uplinkConfig)
@@ -180,10 +201,13 @@ export const connect = async (
 
     getBaseBalance: getBaseBalance(state),
 
-    serializeConfig(): ConfigSchema {
+    serializeConfig(): MultiConfigSchema {
       return {
-        uplinks: this.state.uplinks.map(uplink => uplink.config),
-        credentials: this.state.credentials.map(credentialToConfig)
+        ...baseConfig,
+        [ledgerEnv]: {
+          uplinks: this.state.uplinks.map(uplink => uplink.config),
+          credentials: this.state.credentials.map(credentialToConfig)
+        }
       }
     },
 
