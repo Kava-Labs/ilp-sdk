@@ -1,4 +1,10 @@
-import { convert } from '@kava-labs/crypto-rate-utils'
+import {
+  convert,
+  exchangeQuantity,
+  exchangeUnit,
+  accountQuantity,
+  accountUnit
+} from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
 import {
@@ -11,12 +17,13 @@ import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { State } from '..'
+import { first, timeout } from 'rxjs/operators'
 
 const log = createLogger('ilp-sdk:stream')
 
 BigNumber.config({ EXPONENTIAL_AT: 1e9 }) // Almost never use exponential notation
 
-// TODO Remove this rule... fix this eventually!
+// TODO Remove this rule... fix this eventually, make better use of RxJS!
 /* tslint:disable:no-let */
 
 /** End stream if no packets are successfully fulfilled within this interval */
@@ -24,6 +31,24 @@ const IDLE_TIMEOUT = 10000
 
 /** Amount of time in the future when packets should expire */
 const EXPIRATION_WINDOW = 5000
+
+export interface StreamMoneyOpts {
+  /** Amount of money to be sent over stream, in units of exchange */
+  readonly amount: BigNumber
+
+  /** Send assets via the given source ledger/plugin */
+  readonly source: ReadyUplinks
+
+  /** Receive assets via the given destination ledger/plugin */
+  readonly dest: ReadyUplinks
+
+  /**
+   * Maximum percentage of slippage allowed. If the per-packet exchange rate
+   * drops below the price oracle's rate minus this slippage,
+   * the packet will be rejected
+   */
+  readonly slippage?: BigNumber.Value
+}
 
 /**
  * Send money between the two upinks, with the total untrusted
@@ -39,27 +64,10 @@ export const streamMoney = (state: State) => async ({
   source,
   dest,
   slippage = 0.01
-}: {
-  /** Amount of money to be sent over stream, in units of exchange */
-  readonly amount: BigNumber
-  /** Send assets via the given source ledger/plugin */
-  readonly source: ReadyUplinks
-  /** Receive assets via the given destination ledger/plugin */
-  readonly dest: ReadyUplinks
-  /**
-   * Maximum percentage of slippage allowed. If the per-packet exchange rate
-   * drops below the price oracle's rate minus this slippage,
-   * the packet will be rejected
-   */
-  readonly slippage?: BigNumber.Value
-}): Promise<void> => {
-  const sourceSettler = state.settlers[source.settlerType]
-  const destSettler = state.settlers[dest.settlerType]
-
-  const amountToSend = convert(
-    sourceSettler.exchangeUnit(amount),
-    sourceSettler.baseUnit()
-  ).decimalPlaces(0, BigNumber.ROUND_DOWN)
+}: StreamMoneyOpts): Promise<void> => {
+  const amountToSend = accountQuantity(
+    exchangeQuantity(source.asset, amount)
+  ).amount.decimalPlaces(0, BigNumber.ROUND_DOWN)
 
   /**
    * Why no test packets?
@@ -80,21 +88,21 @@ export const streamMoney = (state: State) => async ({
 
   // TODO Move this to uplink.ts so it's more abstracted
   const format = (amount: BigNumber) =>
-    `${convert(
-      sourceSettler.baseUnit(amount),
-      sourceSettler.exchangeUnit()
-    )} ${sourceSettler.assetCode.toLowerCase()}`
+    `${
+      convert(accountQuantity(source.asset, amount), exchangeUnit(source.asset))
+        .amount
+    } ${source.asset.symbol.toLowerCase()}`
 
   log.debug(
-    `starting streaming exchange from ${sourceSettler.assetCode} -> ${
-      destSettler.assetCode
+    `starting streaming exchange from ${source.asset.symbol} -> ${
+      dest.asset.symbol
     }`
   )
 
   // If no packets get through for 10 seconds, kill the stream
-  let timeout: number
+  let fulfilledPacketDeadline: number
   const bumpIdle = () => {
-    timeout = Date.now() + IDLE_TIMEOUT
+    fulfilledPacketDeadline = Date.now() + IDLE_TIMEOUT
   }
   bumpIdle()
 
@@ -104,8 +112,24 @@ export const streamMoney = (state: State) => async ({
   let maxPacketAmount = new BigNumber(Infinity)
 
   const trySendPacket = async (): Promise<any> => {
+    // Wait for the last connector to settle to 0 before sending any additional money to them
+    // (since there's no longer any max balance, this is very important)
+    await dest.pluginWrapper.receivableBalance$
+      .pipe(
+        first(amount => amount.isLessThanOrEqualTo(0)),
+        timeout(IDLE_TIMEOUT)
+      )
+      .toPromise()
+      .catch(() => {
+        log.error(
+          `stream timed out: peer of destination uplink hasn't settled to 0, can't fulfill more packets`
+        )
+
+        return Promise.reject()
+      })
+
     // TODO Add error for "poor exchange rate" if every (?) error within window was due to an exchange rate problem?
-    const isFailing = Date.now() > timeout
+    const isFailing = Date.now() > fulfilledPacketDeadline
     if (isFailing) {
       log.error('stream timed out: no packets fulfilled within idle window')
       return Promise.reject()
@@ -129,10 +153,9 @@ export const streamMoney = (state: State) => async ({
     }
 
     const availableToSend = source.availableToSend$.getValue()
-    const remainingToSend = convert(
-      sourceSettler.baseUnit(remainingAmount),
-      sourceSettler.exchangeUnit()
-    )
+    const remainingToSend = exchangeQuantity(
+      accountQuantity(source.asset, remainingAmount)
+    ).amount
     if (remainingToSend.isGreaterThan(availableToSend)) {
       log.error(
         `stream failed: insufficient outgoing capacity to fulfill remaining amount of ${format(
@@ -148,10 +171,10 @@ export const streamMoney = (state: State) => async ({
       new BigNumber(1).minus(slippage)
     )
     const remainingToReceive = convert(
-      sourceSettler.baseUnit(remainingAmount),
-      destSettler.exchangeUnit(),
+      accountQuantity(source.asset, remainingAmount),
+      exchangeUnit(dest.asset),
       state.rateBackend
-    )
+    ).amount
     if (remainingToReceive.isGreaterThan(availableToReceive)) {
       log.error(
         `stream failed: insufficient incoming capacity to fulfill remaining amount of ${format(
@@ -191,11 +214,11 @@ export const streamMoney = (state: State) => async ({
     ) =>
       new BigNumber(destAmount).isGreaterThanOrEqualTo(
         convert(
-          sourceSettler.baseUnit(sourceAmount),
-          destSettler.baseUnit(),
+          accountQuantity(source.asset, sourceAmount),
+          accountUnit(dest.asset),
           state.rateBackend
         )
-          .times(new BigNumber(1).minus(slippage))
+          .amount.times(new BigNumber(1).minus(slippage))
           .integerValue(BigNumber.ROUND_CEIL)
       )
 
@@ -251,11 +274,11 @@ export const streamMoney = (state: State) => async ({
           .dividedToIntegerBy(foreignReceivedAmount)
 
         // As we encounter more F08s, max packet amount should never increase!
-        if (newMaxPacketAmount.gte(packetAmount)) {
+        if (newMaxPacketAmount.isGreaterThanOrEqualTo(packetAmount)) {
           log.error(
             'unexpected amount too large error: sent less than the max packet amount'
           )
-        } else if (newMaxPacketAmount.lt(packetAmount)) {
+        } else if (newMaxPacketAmount.isLessThan(packetAmount)) {
           log.debug(
             `reducing packet amount from ${packetAmount} to ${newMaxPacketAmount}`
           )

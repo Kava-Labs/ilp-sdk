@@ -1,8 +1,13 @@
 import anyTest, { TestInterface, ExecutionContext } from 'ava'
 import { IlpSdk, connect, LedgerEnv, ReadyUplinks } from '..'
-import { addEth, addXrp, addBtc, createFundedUplink } from './helpers'
-import { convert, usd } from '@kava-labs/crypto-rate-utils'
+import { addEth, addXrp, addBtc, createFundedUplink, addDai } from './helpers'
+import {
+  convert,
+  exchangeQuantity,
+  exchangeUnit
+} from '@kava-labs/crypto-rate-utils'
 import { performance } from 'perf_hooks'
+import { usdAsset, getAssetScale } from '../assets'
 require('envkey')
 
 const test = anyTest as TestInterface<IlpSdk>
@@ -34,14 +39,12 @@ export const testExchange = (
   const initialSourceBalance = sourceUplink.balance$.value
   const initialDestBalance = destUplink.balance$.value
 
-  const sourceSettler = state.settlers[sourceUplink.settlerType]
-  const destSettler = state.settlers[destUplink.settlerType]
-
   const amountToSend = convert(
-    usd(2),
-    sourceSettler.exchangeUnit(),
+    exchangeQuantity(usdAsset, 2),
+    exchangeUnit(sourceUplink.asset),
     state.rateBackend
-  ).decimalPlaces(sourceSettler.assetScale)
+  ).amount.decimalPlaces(getAssetScale(sourceUplink.asset))
+
   const start = performance.now()
   await t.notThrowsAsync(
     streamMoney({
@@ -62,13 +65,15 @@ export const testExchange = (
   )
 
   const estimatedReceiveAmount = convert(
-    sourceSettler.exchangeUnit(amountToSend),
-    destSettler.exchangeUnit(),
+    exchangeQuantity(sourceUplink.asset, amountToSend),
+    exchangeUnit(destUplink.asset),
     state.rateBackend
-  )
+  ).amount
+
   const estimatedDestFinalBalance = initialDestBalance.plus(
     estimatedReceiveAmount
   )
+
   const finalDestBalance = destUplink.balance$.value
   t.true(
     finalDestBalance.isGreaterThan(estimatedDestFinalBalance.times(0.99)) &&
@@ -79,10 +84,17 @@ export const testExchange = (
 
 test('xrp -> eth', testExchange(addXrp(), addEth()))
 test('xrp -> btc', testExchange(addXrp(), addBtc()))
+test('xrp -> xrp', testExchange(addXrp(), addXrp(2)))
+
 test('btc -> eth', testExchange(addBtc(), addEth()))
 test('btc -> xrp', testExchange(addBtc(), addXrp()))
+test('btc -> btc', testExchange(addBtc(), addBtc(2)))
+
 test('eth -> btc', testExchange(addEth(), addBtc()))
 test('eth -> xrp', testExchange(addEth(), addXrp()))
-test('xrp -> xrp', testExchange(addXrp(), addXrp(2)))
 test('eth -> eth', testExchange(addEth(), addEth(2)))
-test('btc -> btc', testExchange(addBtc(), addBtc(2)))
+
+// Since DAI and ETH are similar, only perform a subset of pairs for DAI
+test('btc -> dai', testExchange(addBtc(), addDai()))
+test('dai -> xrp', testExchange(addDai(), addXrp()))
+test('dai -> dai', testExchange(addDai(), addDai(2)))

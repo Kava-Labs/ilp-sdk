@@ -1,4 +1,11 @@
-import { convert } from '@kava-labs/crypto-rate-utils'
+import {
+  convert,
+  AssetUnit,
+  exchangeQuantity,
+  AssetQuantity,
+  accountQuantity,
+  accountUnit
+} from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import createLogger from 'ilp-logger'
 import {
@@ -14,17 +21,18 @@ import { Server as StreamServer } from 'ilp-protocol-stream'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
 import { State } from '.'
-import { ReadyCredentials, getCredential, getCredentialId } from './credential'
-import { SettlementEngine, SettlementEngineType } from './engine'
+import { getCredential, getCredentialId, ReadyCredentials } from './credential'
+import { SettlementEngineType } from './engine'
 import { startStreamServer, stopStreamServer } from './services/stream-server'
-import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
 import { Lnd, LndBaseUplink } from './settlement/lnd'
-import { XrpPaychan, XrpPaychanBaseUplink } from './settlement/xrp-paychan'
 import { Machinomy, MachinomyBaseUplink } from './settlement/machinomy'
-import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
-import { SimpleStore, MemoryStore } from './utils/store'
-import { PluginWrapper } from './utils/middlewares'
+import { XrpPaychan, XrpPaychanBaseUplink } from './settlement/xrp-paychan'
+import { DataHandler, IlpPrepareHandler, Plugin } from './types/plugin'
 import { generateSecret, generateToken } from './utils/crypto'
+import { PluginWrapper } from './utils/middlewares'
+import { defaultDataHandler, defaultIlpPrepareHandler } from './utils/packet'
+import { MemoryStore, SimpleStore } from './utils/store'
+import { AssetCode, CONNECTOR_LIST, getAssetScale } from './assets'
 
 const log = createLogger('ilp-sdk:uplink')
 
@@ -32,6 +40,11 @@ const log = createLogger('ilp-sdk:uplink')
 
 export interface BaseUplinkConfig {
   readonly settlerType: SettlementEngineType
+
+  /**
+   * - A given settler (e.g. Machinomy) may have a default asset type, such as ETH
+   */
+  readonly assetType?: AssetCode
   readonly credentialId: string
   readonly stream: {
     /**
@@ -54,22 +67,27 @@ export interface BaseUplinkConfig {
 export interface BaseUplink {
   readonly plugin: Plugin
   readonly settlerType: SettlementEngineType
+  readonly asset: AssetUnit
   readonly credentialId: string
+
   /**
    * Amount of our *money* in layer 2 we have custody over,
    * immediately available for us to send to our peer
    */
   readonly outgoingCapacity$: BehaviorSubject<BigNumber>
+
   /**
    * Amount of *money* our peer has custody over in layer 2,
    * immediately available for our peer to send to us
    */
   readonly incomingCapacity$: BehaviorSubject<BigNumber>
+
   /**
    * Amount of *money* we've received in layer 2 that is *unavailble* to send
    * (money that we cannot directly send back to our peer)
    */
   readonly totalReceived$: BehaviorSubject<BigNumber>
+
   /**
    * Amount of *money* we've sent in layer 2 that is *unavailable* to receive
    * (money that our peer cannot directly send back to us)
@@ -77,33 +95,43 @@ export interface BaseUplink {
   readonly totalSent$: BehaviorSubject<BigNumber>
 }
 
-export type BaseUplinks =
+export type BaseUplinks = (
   | LndBaseUplink
   | MachinomyBaseUplink
-  | XrpPaychanBaseUplink
+  | XrpPaychanBaseUplink) &
+  BaseUplink
 
-export interface ReadyUplink {
+export interface ReadyUplink extends BaseUplink {
   /** Wrapper plugin with balance logic to and perform accounting and limit the packets we fulfill */
   readonly pluginWrapper: PluginWrapper
+
   /** Handle incoming packets from the endpoint sending money or trading */
-  /* tslint:disable-next-line:readonly-keyword TODO */
+  /* tslint:disable-next-line:readonly-keyword */
   streamClientHandler: IlpPrepareHandler
+
   /** Handle incoming packets from the endpoint receiving money from other parties */
-  /* tslint:disable-next-line:readonly-keyword TODO */
+  /* tslint:disable-next-line:readonly-keyword */
   streamServerHandler: DataHandler
+
   /** ILP address assigned from upstream connector */
   readonly clientAddress: string
+
   /** Max amount to be sent unsecured at a given time */
   readonly maxInFlight: BigNumber
+
   /** Total amount in layer 2 that can be claimed on layer 1 */
   readonly balance$: BehaviorSubject<BigNumber>
+
   /** Total amount that we can send immediately over Interledger */
   readonly availableToSend$: BehaviorSubject<BigNumber>
+
   /** Total amount that we could receive immediately over Interledger */
   readonly availableToReceive$: BehaviorSubject<BigNumber>
+
   /** STREAM server to accept incoming payments from any Interledger client */
   readonly streamServer: StreamServer
-  /** TODO */
+
+  /** TODO Eliminate this/rebuild config instead? */
   readonly config: BaseUplinkConfig
 }
 
@@ -128,28 +156,33 @@ export const isThatUplink = (uplink: ReadyUplinks) => (
  * ------------------------------------
  */
 
-export const createUplink = (state: State) => async (
-  readyCredential: ReadyCredentials
-): Promise<ReadyUplinks> => {
-  const authToken = await generateToken()
-  const settler = state.settlers[readyCredential.settlerType]
-  const createServerUri = settler.remoteConnectors['Kava Labs']
-  const serverUri = createServerUri(authToken)
-  // const serverUriNoToken = createServerUri('') // TODO !
+/** Get the connector BTP URI without an auth token from the given config */
+const getRawServerUri = (config: BaseUplinkConfig): string =>
+  config.plugin.btp.serverUri.replace(config.plugin.btp.authToken, '')
 
-  const credentialId = getCredentialId(readyCredential)
-  const alreadyExists = state.uplinks.some(
-    someUplink =>
-      someUplink.credentialId === credentialId &&
-      someUplink.settlerType === readyCredential.settlerType
-    // TODO This MUST compare the connector it's connected to!
+export const createUplink = async (
+  state: State,
+  readyCredential: ReadyCredentials,
+  assetType?: AssetCode
+): Promise<ReadyUplinks> => {
+  const connector = CONNECTOR_LIST.find(
+    connector =>
+      connector.settlerType === readyCredential.settlerType &&
+      (!assetType || connector.assetType === assetType) &&
+      connector.ledgerEnv === state.ledgerEnv &&
+      !!connector.btp
   )
-  if (alreadyExists) {
-    throw new Error('Cannot create duplicate uplink')
+  if (!connector || !connector.btp) {
+    throw new Error('Specified connector not found')
   }
 
+  const authToken = await generateToken()
+  const serverUri = connector.btp(authToken)
+
+  const credentialId = getCredentialId(readyCredential)
   const config: BaseUplinkConfig = {
     settlerType: readyCredential.settlerType,
+    assetType,
     credentialId,
     stream: {
       serverSecret: (await generateSecret()).toString('hex')
@@ -161,6 +194,16 @@ export const createUplink = (state: State) => async (
       },
       store: {}
     }
+  }
+
+  const alreadyExists = state.uplinks.some(
+    someUplink =>
+      someUplink.credentialId === credentialId &&
+      someUplink.settlerType === readyCredential.settlerType &&
+      getRawServerUri(someUplink.config) === getRawServerUri(config)
+  )
+  if (alreadyExists) {
+    throw new Error('Cannot create duplicate uplink')
   }
 
   return connectUplink(state)(readyCredential)(config)
@@ -185,27 +228,24 @@ export const connectUplink = (state: State) => (
   const uplink = await connectBaseUplink(credential)(state)(config)
   const {
     plugin,
+    asset,
     outgoingCapacity$,
     incomingCapacity$,
     totalReceived$
   } = uplink
 
-  const settler = state.settlers[config.settlerType]
-  const { exchangeUnit, baseUnit } = settler
-
-  const maxInFlight = await getNativeMaxInFlight(state, config.settlerType)
+  const maxInFlight = await getNativeMaxInFlight(state, asset)
   const pluginWrapper = new PluginWrapper({
     plugin,
-    maxBalance: maxInFlight,
     maxPacketAmount: maxInFlight,
-    assetCode: settler.assetCode,
-    assetScale: settler.assetScale,
-    log: createLogger(`ilp-sdk:${settler.assetCode}:balance`),
+    assetCode: asset.symbol,
+    assetScale: getAssetScale(asset),
+    log: createLogger(`ilp-sdk:${asset.symbol}:balance`),
     store: new MemoryStore(config.plugin.store, 'wrapper')
   })
 
   await plugin.connect()
-  const clientAddress = await verifyUpstreamAssetDetails(settler)(plugin)
+  const clientAddress = await verifyUpstreamAssetDetails(asset)(plugin)
 
   const balance$ = new BehaviorSubject(new BigNumber(0))
   combineLatest([
@@ -213,22 +253,7 @@ export const connectUplink = (state: State) => (
     totalReceived$.pipe(distinctBigNum)
   ])
     .pipe(sumAll)
-    // TODO Try subscribing directly...?
-    .subscribe(
-      amount => {
-        balance$.next(amount)
-      },
-      err => {
-        balance$.error(err)
-      },
-      () => {
-        balance$.complete()
-      }
-    )
-
-  const convertToExchangeUnit = map((value: BigNumber) =>
-    convert(baseUnit(value), exchangeUnit())
-  )
+    .subscribe(balance$)
 
   // Available to receive (ILP packets) = incomingCapacity - credit already extended
   const availableToReceive$ = new BehaviorSubject(new BigNumber(0))
@@ -236,7 +261,7 @@ export const connectUplink = (state: State) => (
     incomingCapacity$.pipe(distinctBigNum),
     pluginWrapper.receivableBalance$.pipe(
       distinctBigNum,
-      convertToExchangeUnit
+      convertToExchangeUnit(asset)
     )
   ])
     .pipe(subtract)
@@ -248,7 +273,7 @@ export const connectUplink = (state: State) => (
     outgoingCapacity$.pipe(distinctBigNum),
     pluginWrapper.payableBalance$.pipe(
       distinctBigNum,
-      convertToExchangeUnit
+      convertToExchangeUnit(asset)
     )
   ])
     .pipe(subtract)
@@ -332,7 +357,7 @@ export const setupHandlers = (
 }
 
 /** Confirm the upstream peer shares the same asset details and fetch our ILP address */
-const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
+const verifyUpstreamAssetDetails = (asset: AssetUnit) => async (
   plugin: Plugin
 ): Promise<string> => {
   // Confirm our peer is compatible with the configuration of this uplink
@@ -341,7 +366,7 @@ const verifyUpstreamAssetDetails = (settler: SettlementEngine) => async (
   )
 
   const incompatiblePeer =
-    assetCode !== settler.assetCode || assetScale !== settler.assetScale
+    assetCode !== asset.symbol || assetScale !== getAssetScale(asset)
   if (incompatiblePeer) {
     await plugin.disconnect()
     throw new Error(
@@ -374,7 +399,7 @@ export const sendPacket = async (
   // If we've already prefunded enough and the amount is 0 or negative, sendMoney on wrapper will simply return
   uplink.pluginWrapper
     .sendMoney(additionalPrefundRequired.toString())
-    .catch(err => log.error(`Error during outgoing settlement: `, err))
+    .catch(err => log.error('Error during outgoing settlement:', err))
   return deserializeIlpReply(
     await uplink.pluginWrapper.sendData(serializeIlpPrepare(prepare))
   )
@@ -405,15 +430,13 @@ export const deregisterPacketHandler = registerPacketHandler(
 /** Convert the global max-in-flight amount to the local/native units (base units in plugin) */
 export const getNativeMaxInFlight = async (
   state: State,
-  settlerType: SettlementEngineType
-): Promise<BigNumber> => {
-  const { maxInFlightUsd, rateBackend } = state
-  const { baseUnit } = state.settlers[settlerType]
-  return convert(maxInFlightUsd, baseUnit(), rateBackend).dp(
-    0,
-    BigNumber.ROUND_DOWN
-  )
-}
+  asset: AssetUnit
+): Promise<BigNumber> =>
+  convert(
+    state.maxInFlightUsd,
+    accountUnit(asset),
+    state.rateBackend
+  ).amount.decimalPlaces(0, BigNumber.ROUND_DOWN)
 
 /**
  * ------------------------------------
@@ -424,15 +447,17 @@ export const getNativeMaxInFlight = async (
 export type AuthorizeDeposit = (params: {
   /** Total amount that will move from layer 1 to layer 2, in units of exchange */
   readonly value: BigNumber
+
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  readonly fee: BigNumber
+  readonly fee: AssetQuantity
 }) => Promise<void>
 
 export type AuthorizeWithdrawal = (params: {
   /** Total amount that will move from layer 2 to layer 1, in units of exchange */
   readonly value: BigNumber
+
   /** Amount burned/lost as fee as a result of the transaction, in units of exchange */
-  readonly fee: BigNumber
+  readonly fee: AssetQuantity
 }) => Promise<void>
 
 export const depositToUplink = (uplink: ReadyUplinks) => {
@@ -480,7 +505,7 @@ export const closeUplink = async (uplink: ReadyUplinks) => {
  */
 export const getBaseBalance = (state: State) => async (
   uplink: ReadyUplinks
-) => {
+): Promise<AssetQuantity> => {
   const credential = getCredential(state)(uplink.credentialId)!
 
   switch (credential.settlerType) {
@@ -510,3 +535,8 @@ export const subtract = map(([a, b]: [BigNumber, BigNumber]) => a.minus(b))
 export const distinctBigNum = distinctUntilChanged(
   (prev: BigNumber, curr: BigNumber) => prev.isEqualTo(curr)
 )
+
+export const convertToExchangeUnit = (asset: AssetUnit) =>
+  map(
+    (value: BigNumber) => exchangeQuantity(accountQuantity(asset, value)).amount
+  )

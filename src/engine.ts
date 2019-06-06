@@ -1,5 +1,3 @@
-import { AssetUnit } from '@kava-labs/crypto-rate-utils'
-import BigNumber from 'bignumber.js'
 import { LndSettlementEngine } from './settlement/lnd'
 import {
   XrpPaychanSettlementEngine,
@@ -18,17 +16,6 @@ export enum SettlementEngineType {
 
 export interface SettlementEngine {
   readonly settlerType: SettlementEngineType
-  readonly assetCode: string
-  readonly assetScale: number
-  readonly baseUnit: (amount?: BigNumber.Value) => AssetUnit
-  readonly exchangeUnit: (amount?: BigNumber.Value) => AssetUnit
-  /**
-   * Mapping of BTP websocket URIs for remote connectors,
-   * specific to the ledger env of the settlement engine
-   */
-  readonly remoteConnectors: {
-    readonly [name: string]: (token: string) => string
-  }
 }
 
 export type SettlementEngines = (

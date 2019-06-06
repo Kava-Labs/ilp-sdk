@@ -1,10 +1,11 @@
 import {
-  AssetUnit,
   connectCoinCap,
-  RateApi,
-  usd
+  exchangeQuantity,
+  AssetQuantity,
+  RateApi
 } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
+import { AssetCode, usdAsset } from './assets'
 import {
   closeCredential,
   CredentialConfigs,
@@ -46,12 +47,16 @@ export enum LedgerEnv {
   Local = 'local'
 }
 
+export type UplinkConfigs = CredentialConfigs & {
+  readonly assetType?: AssetCode
+}
+
 export { SettlementEngineType, ReadyUplinks }
 
 export interface State {
   readonly ledgerEnv: LedgerEnv
   readonly rateBackend: RateApi
-  readonly maxInFlightUsd: AssetUnit
+  readonly maxInFlightUsd: AssetQuantity
   // TODO Is this simpler as an array and filter? Hard to get the types right
   readonly settlers: {
     // [settlerType: keyof typeof SettlementEngineType]: SettlementEngines
@@ -88,7 +93,7 @@ export const connect = async (
   const state: State = {
     ledgerEnv,
     rateBackend: await connectCoinCap(),
-    maxInFlightUsd: usd(0.1),
+    maxInFlightUsd: exchangeQuantity(usdAsset, 0.1),
     settlers: {
       [SettlementEngineType.Lnd]: await Lnd.setupEngine(ledgerEnv),
       [SettlementEngineType.Machinomy]: await Machinomy.setupEngine(ledgerEnv),
@@ -128,11 +133,13 @@ export const connect = async (
   return {
     state,
 
-    async add(credentialConfig: CredentialConfigs): Promise<ReadyUplinks> {
+    async add(uplinkConfig: UplinkConfigs): Promise<ReadyUplinks> {
+      const { assetType, ...credentialConfig } = uplinkConfig
       const readyCredential = await getOrCreateCredential(state)(
         credentialConfig
       )
-      const readyUplink = await createUplink(state)(readyCredential)
+
+      const readyUplink = await createUplink(state, readyCredential, assetType)
       state.uplinks = [...state.uplinks, readyUplink] // TODO What if the uplink is a duplicate? (throws?)
       return readyUplink
     },
