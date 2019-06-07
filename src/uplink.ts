@@ -148,7 +148,8 @@ export const isThatUplink = (uplink: ReadyUplinks) => (
   someUplink: ReadyUplinks
 ) =>
   someUplink.credentialId === uplink.credentialId &&
-  someUplink.settlerType === uplink.settlerType
+  someUplink.settlerType === uplink.settlerType &&
+  someUplink.asset.symbol === uplink.asset.symbol
 
 /**
  * ------------------------------------
