@@ -10,10 +10,7 @@ import BigNumber from 'bignumber.js'
 import createLogger from 'ilp-logger'
 import {
   deserializeIlpPrepare,
-  deserializeIlpReply,
   IlpPrepare,
-  IlpReply,
-  serializeIlpPrepare,
   serializeIlpReply
 } from 'ilp-packet'
 import { fetch as fetchAssetDetails } from 'ilp-protocol-ildcp'
@@ -384,27 +381,6 @@ const verifyUpstreamAssetDetails = (asset: AssetUnit) => async (
  * (settlements + sending + clearing)
  * ------------------------------------
  */
-
-/**
- * Serialize and send an ILP PREPARE to the upstream connector,
- * and prefund the value of the packet (assumes peer credit limit is 0)
- */
-export const sendPacket = async (
-  uplink: ReadyUplinks,
-  prepare: IlpPrepare
-): Promise<IlpReply> => {
-  const additionalPrefundRequired = uplink.pluginWrapper.payableBalance$.value.plus(
-    prepare.amount
-  )
-
-  // If we've already prefunded enough and the amount is 0 or negative, sendMoney on wrapper will simply return
-  uplink.pluginWrapper
-    .sendMoney(additionalPrefundRequired.toString())
-    .catch(err => log.error('Error during outgoing settlement:', err))
-  return deserializeIlpReply(
-    await uplink.pluginWrapper.sendData(serializeIlpPrepare(prepare))
-  )
-}
 
 /**
  * Registers a handler for incoming packets not addressed to a

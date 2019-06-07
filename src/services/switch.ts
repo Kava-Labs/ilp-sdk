@@ -6,9 +6,15 @@ import {
   accountUnit
 } from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
-import { IlpFulfill, isFulfill, isReject } from 'ilp-packet'
 import {
-  sendPacket,
+  IlpFulfill,
+  isFulfill,
+  isReject,
+  IlpPrepare,
+  deserializeIlpReply,
+  serializeIlpPrepare
+} from 'ilp-packet'
+import {
   deregisterPacketHandler,
   registerPacketHandler,
   ReadyUplinks
@@ -17,7 +23,6 @@ import { Reader } from 'oer-utils'
 import { generateSecret, sha256 } from '../utils/crypto'
 import createLogger from '../utils/log'
 import { State } from '..'
-import { first, timeout } from 'rxjs/operators'
 
 const log = createLogger('ilp-sdk:stream')
 
@@ -87,11 +92,16 @@ export const streamMoney = (state: State) => async ({
    */
 
   // TODO Move this to uplink.ts so it's more abstracted
-  const format = (amount: BigNumber) =>
+  const format = (amount: BigNumber, uplink = source) =>
     `${
-      convert(accountQuantity(source.asset, amount), exchangeUnit(source.asset))
+      convert(accountQuantity(uplink.asset, amount), exchangeUnit(uplink.asset))
         .amount
-    } ${source.asset.symbol.toLowerCase()}`
+    } ${uplink.asset.symbol.toLowerCase()}`
+
+  const sendPacket = async (prepare: IlpPrepare) =>
+    deserializeIlpReply(
+      await source.pluginWrapper.sendData(serializeIlpPrepare(prepare))
+    )
 
   log.debug(
     `starting streaming exchange from ${source.asset.symbol} -> ${
@@ -112,22 +122,6 @@ export const streamMoney = (state: State) => async ({
   let maxPacketAmount = new BigNumber(Infinity)
 
   const trySendPacket = async (): Promise<any> => {
-    // Wait for the last connector to settle to 0 before sending any additional money to them
-    // (since there's no longer any max balance, this is very important)
-    await dest.pluginWrapper.receivableBalance$
-      .pipe(
-        first(amount => amount.isLessThanOrEqualTo(0)),
-        timeout(IDLE_TIMEOUT)
-      )
-      .toPromise()
-      .catch(() => {
-        log.error(
-          `stream timed out: peer of destination uplink hasn't settled to 0, can't fulfill more packets`
-        )
-
-        return Promise.reject()
-      })
-
     // TODO Add error for "poor exchange rate" if every (?) error within window was due to an exchange rate problem?
     const isFailing = Date.now() > fulfilledPacketDeadline
     if (isFailing) {
@@ -244,8 +238,29 @@ export const streamMoney = (state: State) => async ({
           : fulfillPacket
     )(dest)
 
+    // Only send subsequent settlements if the connector settles such that they owe us 0
+    const amountOwedToDestUplink = dest.pluginWrapper.receivableBalance$.value
+    if (amountOwedToDestUplink.isLessThanOrEqualTo(0)) {
+      // Top up the amount prefunded so it can cover the packet about to be sent
+      const additionalPrefundRequired = source.pluginWrapper.payableBalance$.value.plus(
+        packetAmount
+      )
+
+      source.pluginWrapper
+        .sendMoney(additionalPrefundRequired.toString())
+        .catch(err => log.error('Error during outgoing settlement:', err))
+    } else {
+      log.error(
+        `cannot prefund: destination uplink awaiting settlement for ${format(
+          amountOwedToDestUplink,
+          dest
+        )}`
+      )
+    }
+
+    // Send the ILP packet
     log.debug(`sending packet ${packetNum} for ${packetAmount}`)
-    const response = await sendPacket(source, {
+    const response = await sendPacket({
       destination: dest.clientAddress,
       amount: packetAmount.toString(),
       executionCondition,
