@@ -89,6 +89,8 @@ const ethUplink = await sdk.add({
 
 #### Configure Machinomy (DAI)
 
+On the Kovan testnet, DAI can be acquired by locking kETH in a CDP through [MakerDAO's CDP portal](https://cdp.makerdao.com), or trading kETH for DAI using [Eth2Dai](https://eth2dai.com/instant).
+
 ```js
 const ethUplink = await sdk.add({
   settlerType: SettlementEngineType.Machinomy,
