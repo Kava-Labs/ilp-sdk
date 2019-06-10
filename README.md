@@ -6,7 +6,7 @@
 [![Prettier](https://img.shields.io/badge/code_style-prettier-brightgreen.svg?style=flat-square)](https://prettier.io/)
 [![License](https://img.shields.io/npm/l/@kava-labs/switch-api.svg?style=flat-square)](https://github.com/Kava-Labs/ilp-sdk/blob/master/LICENSE)
 
-### Streaming cross-chain payments between BTC, ETH and XRP with Interledger
+### Streaming cross-chain payments between BTC, ETH, DAI and XRP with Interledger
 
 In ~20 lines of code,
 
@@ -22,11 +22,11 @@ The SDK is built around the concept of an uplink, which is a relationship with a
 
 Create different types of uplinks, based upon the settlement mechanism & asset:
 
-| Uplink Type  | Supported Asset(s)       | Settlement Mechanism                                  |
-| :----------- | :----------------------- | :---------------------------------------------------- |
-| `Lnd`        | Bitcoin                  | Bitcoin Lightning Network using LND                   |
-| `Machinomy`  | Ether _(soon, ERC-20s!)_ | Machinomy unidirectional payment channels on Ethereum |
-| `XrpPaychan` | XRP                      | Native payment channels on the XRP ledger             |
+| Uplink Type  | Supported Asset(s) | Settlement Mechanism                                     |
+| :----------- | :----------------- | :------------------------------------------------------- |
+| `Lnd`        | BTC                | Bitcoin Lightning Network using LND                      |
+| `Machinomy`  | ETH, DAI           | Machinomy unidirectional payment channels on Ethereum    |
+| `XrpPaychan` | XRP                | Native unidirectional payment channels on the XRP ledger |
 
 By default, the SDK connects to the Kava testnet connector; user-defined connectors will be supported in the near future. However, Kava's [connector configuration](https://github.com/kava-labs/connector-config) is open-source, enabling you to run a local connector for development.
 
@@ -63,7 +63,7 @@ The SDK can serialize an object with all the configured uplinks, credentials, an
 const config = sdk.serializeConfig()
 ```
 
-If a persistence layer was implemented on top of the SDK, the consumer could, for example, stringify the config object and persist it to the filesystem.
+If a persistence layer was implemented on top of the SDK, the consumer could, for example, stringify the config object as JSON and persist it to the filesystem.
 
 To load a config object into the SDK, it may optionally be passed on `connect`. For example:
 
@@ -74,15 +74,27 @@ const sdk = await connect(
 )
 ```
 
-Funds may be lost if the configuration is not saved.
+**Funds may be lost if the configuration is not saved.**
 
-#### Configure Machinomy
+#### Configure Machinomy (ETH)
 
 In testnet mode, Machinomy uplinks use the Kovan testnet on Ethereum. Kovan ether can be requested from [this faucet](https://faucet.kovan.network/).
 
 ```js
 const ethUplink = await sdk.add({
   settlerType: SettlementEngineType.Machinomy,
+  privateKey: '36fa71e0c8b177cc170e06e59abe8c83db1db0bae53a5f89624a891fd3c285a7'
+})
+```
+
+#### Configure Machinomy (DAI)
+
+On the Kovan testnet, DAI can be acquired by locking kETH in a CDP through [MakerDAO's CDP portal](https://cdp.makerdao.com), or trading kETH for DAI using [Eth2Dai](https://eth2dai.com/instant).
+
+```js
+const ethUplink = await sdk.add({
+  settlerType: SettlementEngineType.Machinomy,
+  assetType: 'DAI',
   privateKey: '36fa71e0c8b177cc170e06e59abe8c83db1db0bae53a5f89624a891fd3c285a7'
 })
 ```
@@ -133,12 +145,18 @@ await sdk.deposit({
    */
   amount: new BigNumber(0.05),
 
-  /** Callback to authorize the fee and amount to be transferred from layer 1, after it's calculated */
-  authorize: ({ fee, value }) => {
-    /**
-     * Resolve the promise to continue the deposit,
-     * or reject the promise to cancel it
-     */
+  /**
+   * Callback to authorize the fee and amount to be transferred from layer 1, after it's calculated,
+   * which must return a Promise
+   */
+  authorize: async ({ fee }) => {
+    console.log('Fee:', fee.amount.toString())
+
+    // Resolve the Promise continue with the deposit...
+    return
+
+    // ...or reject the Promise to cancel it:
+    throw new Error('Fee too high!')
   }
 })
 ```
@@ -163,6 +181,54 @@ ethUplink.balance$.subscribe(amount => {
   console.log('Interledger balance:', amount.toString())
 })
 ```
+
+##### `availableToSend$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the total amount immediately available to send over Interledger (outgoing capacity plus the amount prefunded).
+
+##### `availableToReceive$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the total amount immediately available to receive over Interledger (incoming capacity minus the amount of credit already extended).
+
+##### `outgoingCapacity$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the amount of money in custody in layer 2, immediately available to send to the peer.
+
+- **Lightning**: the total funds available across all open Lightning channels.
+- **Machinomy & XRP**: remaining (unspent) capacity in the outgoing payment channel in this uplink's custody.
+
+##### `incomingCapacity$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the amount of money the peer has custody over in layer 2, immediately available for the peer to send to this uplink.
+
+- **Lightning**: `Infinity` (since LND doesn't provide a simple mechanism to fetch it)
+- **Machinomy & XRP**: remaining (unspent) capacity in the incoming payment channel in the peer's custody.
+
+##### `totalSent$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the amount we've sent in layer 2 that is _unavailble_ to receive (money that the peer cannot directly send back to us).
+
+- **Lightning**: `0`
+- **Machinomy & XRP**: total amount spent in the outgoing payment channel in the peer's custody.
+
+##### `totalReceived$`
+
+> `BehaviorSubject<BigNumber>`
+
+Emits the amount we've received in layer 2 that is _unavailble_ to send (money that cannot be directly sent back to the peer).
+
+- **Lightning**: `0`
+- **Machinomy & XRP**: total amount spent from the incoming payment channel in this uplink's custody.
 
 ### Trade (switch!)
 
@@ -227,12 +293,18 @@ await sdk.withdraw({
   /** Uplink to withdraw from */
   uplink: ethUplink,
 
-  /** Callback to authorize the fee and amount to be transferred to layer 1, after it's calculated */
-  authorize: ({ fee, value }) => {
-    /**
-     * Resolve the promise to continue the withdrawal,
-     * or reject the promise to cancel it
-     */
+  /**
+   * Callback to authorize the fee and amount to be transferred to layer 1, after it's calculated,
+   * which must return a Promise
+   */
+  authorize: async ({ fee, value }) => {
+    console.log('Fee:', fee.amount.toString())
+
+    // Resolve the Promise continue with the withdrawal...
+    return
+
+    // ...or reject the Promise to cancel it:
+    throw new Error('Fee too high!')
   }
 })
 
@@ -261,8 +333,8 @@ await sdk.disconnect()
 - [x] Support for Electron
 - [x] Serialize uplink configurations
 - [x] Mainnet release
+- [x] Support for ERC-20 tokens such as DAI
 - [ ] Internal refactoring/improving code quality
 - [ ] Support for user-defined connectors
-- [ ] Additional assets, including ERC-20 tokens such as DAI
 - [ ] Generate invoices/receive payments via internal STREAM server
 - [ ] Send peer-to-peer payments using STREAM & SPSP

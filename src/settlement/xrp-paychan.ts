@@ -1,4 +1,8 @@
-import { convert, drop, xrp } from '@kava-labs/crypto-rate-utils'
+import {
+  AssetQuantity,
+  exchangeQuantity,
+  baseQuantity
+} from '@kava-labs/crypto-rate-utils'
 import XrpPlugin, {
   ClaimablePaymentChannel,
   PaymentChannel,
@@ -24,6 +28,13 @@ import {
 } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
+import { xrpAsset } from '../assets'
+
+const dropsToXrp = (amount: BigNumber.Value): AssetQuantity =>
+  exchangeQuantity(baseQuantity(xrpAsset, amount))
+
+const xrpToDrops = (amount: BigNumber.Value): AssetQuantity =>
+  baseQuantity(exchangeQuantity(xrpAsset, amount))
 
 /**
  * ------------------------------------
@@ -51,22 +62,6 @@ const setupEngine = async (
 
   return {
     settlerType: SettlementEngineType.XrpPaychan,
-    assetCode: 'XRP',
-    assetScale: 6,
-    baseUnit: drop,
-    exchangeUnit: xrp,
-    remoteConnectors: {
-      local: {
-        'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7443`
-      },
-      testnet: {
-        'Kava Labs': (token: string) =>
-          `btp+wss://:${token}@test.ilp.kava.io/xrp`
-      },
-      mainnet: {
-        'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/xrp`
-      }
-    }[ledgerEnv],
     api
   }
 }
@@ -121,9 +116,9 @@ export const configFromXrpCredential = ({
 export const getBaseBalance = async (
   settler: XrpPaychanSettlementEngine,
   credential: ValidatedXrpSecret
-) => {
+): Promise<AssetQuantity> => {
   const response = await settler.api.getAccountInfo(credential.address)
-  return new BigNumber(response.xrpBalance)
+  return exchangeQuantity(xrpAsset, response.xrpBalance)
 }
 
 /**
@@ -165,9 +160,7 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
 
   const pluginAccount = await plugin._loadAccount('peer')
 
-  const toXrp = map<BigNumber, BigNumber>(amount =>
-    convert(drop(amount), xrp())
-  )
+  const toXrp = map<BigNumber, BigNumber>(amount => dropsToXrp(amount).amount)
 
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
@@ -213,6 +206,7 @@ const connectUplink = (credential: ValidatedXrpSecret) => (
 
   return {
     settlerType: SettlementEngineType.XrpPaychan,
+    asset: xrpAsset,
     credentialId: uniqueId(credential),
     plugin,
     pluginAccount,
@@ -242,38 +236,41 @@ const deposit = (uplink: ReadyXrpPaychanUplink) => (state: State) => async ({
   }
   const { address } = readyCredential
 
-  const fundAmountDrops = convert(xrp(amount), drop())
-  await uplink.pluginAccount.fundOutgoingChannel(fundAmountDrops, async fee => {
-    // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
+  const fundAmountDrops = xrpToDrops(amount).amount
+  await uplink.pluginAccount.fundOutgoingChannel(
+    fundAmountDrops,
+    async feeXrp => {
+      // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
 
-    // Confirm that the account has sufficient funds to cover the reserve
-    // TODO May throw if the account isn't found
-    const { ownerCount, xrpBalance } = await api.getAccountInfo(address)
-    const {
-      validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
-    } = await api.getServerInfo()
-    const minBalance =
-      /* Minimum amount of XRP for every account to keep in reserve */
-      +reserveBaseXRP +
-      /** Current amount reserved in XRP for each object the account is responsible for */
-      +reserveIncrementXRP * ownerCount +
-      /** Additional reserve this channel requires, in units of XRP */
-      +reserveIncrementXRP +
-      /** Amount to fund the channel, in unit sof XRP */
-      +amount +
-      /** Assume channel creation fee from plugin, in units of XRP */
-      +fee
-    const currentBalance = +xrpBalance
-    if (currentBalance < minBalance) {
-      // TODO Return a specific type of error
-      throw new Error('insufficient funds')
+      // Confirm that the account has sufficient funds to cover the reserve
+      // TODO May throw if the account isn't found
+      const { ownerCount, xrpBalance } = await api.getAccountInfo(address)
+      const {
+        validatedLedger: { reserveBaseXRP, reserveIncrementXRP }
+      } = await api.getServerInfo()
+      const minBalance =
+        /* Minimum amount of XRP for every account to keep in reserve */
+        +reserveBaseXRP +
+        /** Current amount reserved in XRP for each object the account is responsible for */
+        +reserveIncrementXRP * ownerCount +
+        /** Additional reserve this channel requires, in units of XRP */
+        +reserveIncrementXRP +
+        /** Amount to fund the channel, in unit sof XRP */
+        +amount +
+        /** Assume channel creation fee from plugin, in units of XRP */
+        +feeXrp
+      const currentBalance = +xrpBalance
+      if (currentBalance < minBalance) {
+        // TODO Return a specific type of error
+        throw new Error('insufficient funds')
+      }
+
+      await authorize({
+        value: amount,
+        fee: exchangeQuantity(xrpAsset, feeXrp)
+      })
     }
-
-    await authorize({
-      value: amount,
-      fee
-    })
-  })
+  )
 
   // Wait up to 1 minute for incoming capacity to be created
   await uplink.incomingCapacity$
@@ -298,17 +295,17 @@ const withdraw = (uplink: ReadyXrpPaychanUplink) => async (
       !claimChannelAuthReady &&
       authorize({
         value: uplink.outgoingCapacity$.value,
-        fee: new BigNumber(0)
+        fee: dropsToXrp(0)
       }).then(resolve, reject)
 
     claimChannel = uplink.pluginAccount
-      .claimChannel(false, (channel, fee) => {
+      .claimChannel(false, (channel, feeXrp) => {
         claimChannelAuthReady = true
         const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
-            convert(drop(channel.spent), xrp())
+            dropsToXrp(channel.spent).amount
           ),
-          fee
+          fee: exchangeQuantity(xrpAsset, feeXrp)
         })
 
         internalAuthorize.then(resolve, reject)

@@ -1,4 +1,10 @@
-import { convert, eth, gwei, wei } from '@kava-labs/crypto-rate-utils'
+import {
+  exchangeQuantity,
+  baseQuantity,
+  accountQuantity,
+  AssetQuantity
+} from '@kava-labs/crypto-rate-utils'
+import axios from 'axios'
 import BigNumber from 'bignumber.js'
 import { ethers } from 'ethers'
 import EthereumPlugin, {
@@ -10,7 +16,8 @@ import EthereumPlugin, {
 } from 'ilp-plugin-ethereum'
 import { BehaviorSubject, fromEvent } from 'rxjs'
 import { first, map, startWith, timeout } from 'rxjs/operators'
-import { LedgerEnv, State } from '..'
+import { State } from '..'
+import { ethAsset, getAsset } from '../assets'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import {
   AuthorizeDeposit,
@@ -21,7 +28,34 @@ import {
 } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
-import { fetchGasPrice } from './shared/eth'
+
+// TODO If this is imported from '..', it causes a runtime TypeError that I think is caused by circular dependency resolution
+enum LedgerEnv {
+  Mainnet = 'mainnet',
+  Testnet = 'testnet',
+  Local = 'local'
+}
+
+const DAI_MAINNET_ADDRESS = '0x89d24a6b4ccb1b6faa2625fe562bdd9a23260359'
+const DAI_KOVAN_ADDRESS = '0xC4375B7De8af5a38a93548eb8453a498222C4fF2'
+
+const TOKEN_ADDRESSES = [
+  {
+    symbol: 'DAI',
+    ledgerEnv: LedgerEnv.Mainnet,
+    tokenAddress: DAI_MAINNET_ADDRESS
+  },
+  {
+    symbol: 'DAI',
+    ledgerEnv: LedgerEnv.Testnet,
+    tokenAddress: DAI_KOVAN_ADDRESS
+  },
+  {
+    symbol: 'DAI',
+    ledgerEnv: LedgerEnv.Local,
+    tokenAddress: DAI_KOVAN_ADDRESS
+  }
+]
 
 /**
  * ------------------------------------
@@ -43,22 +77,6 @@ export const setupEngine = async (
 
   return {
     settlerType: SettlementEngineType.Machinomy,
-    assetCode: 'ETH',
-    assetScale: 9,
-    baseUnit: gwei,
-    exchangeUnit: eth,
-    remoteConnectors: {
-      local: {
-        'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7442`
-      },
-      testnet: {
-        'Kava Labs': (token: string) =>
-          `btp+wss://:${token}@test.ilp.kava.io/eth`
-      },
-      mainnet: {
-        'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/eth`
-      }
-    }[ledgerEnv],
     ethereumProvider,
     fetchGasPrice:
       ledgerEnv === LedgerEnv.Mainnet
@@ -110,14 +128,15 @@ export const configFromEthereumCredential = ({
   ...config
 }: ReadyEthereumCredential): ValidatedEthereumPrivateKey => config
 
+// TODO Should this be denominated in the ERC-20 itself? (Return array of quantities?)
 export const getBaseBalance = async (
   settler: MachinomySettlementEngine,
   credential: ReadyEthereumCredential
-) => {
+): Promise<AssetQuantity> => {
   const balanceWei = await settler.ethereumProvider.getBalance(
     credential.address
   )
-  return convert(wei(balanceWei.toString()), eth())
+  return exchangeQuantity(baseQuantity(ethAsset, balanceWei.toString()))
 }
 
 /**
@@ -150,13 +169,34 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
   const settler = state.settlers[credential.settlerType]
   const { ethereumProvider, fetchGasPrice } = settler
 
+  const assetType = config.assetType || 'ETH'
+  const asset = getAsset(assetType)
+
+  // If using ERC-20s, fetch token contract address
+  // tslint:disable-next-line:no-let
+  let tokenAddress: string | undefined
+  if (assetType !== 'ETH') {
+    const tokenMetadata = TOKEN_ADDRESSES.find(
+      tokenMetadata =>
+        tokenMetadata.ledgerEnv === state.ledgerEnv &&
+        tokenMetadata.symbol === assetType
+    )
+
+    if (!tokenMetadata) {
+      throw new Error('ERC-20 not supported')
+    } else {
+      tokenAddress = tokenMetadata.tokenAddress
+    }
+  }
+
   const plugin = new EthereumPlugin(
     {
       role: 'client',
       server,
       ethereumPrivateKey,
       ethereumProvider,
-      getGasPrice: fetchGasPrice
+      getGasPrice: fetchGasPrice,
+      tokenAddress
     },
     {
       store: new MemoryStore(store),
@@ -166,14 +206,16 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
 
   const pluginAccount = await plugin._loadAccount('peer')
 
-  const toEth = map<BigNumber, BigNumber>(amount => convert(wei(amount), eth()))
+  const mapToExchangeUnit = map<BigNumber, BigNumber>(amount =>
+    amount.shiftedBy(-asset.exchangeScale)
+  )
 
   const totalSent$ = new BehaviorSubject(new BigNumber(0))
   fromEvent<PaymentChannel | undefined>(pluginAccount.account.outgoing, 'data')
     .pipe(
       startWith(pluginAccount.account.outgoing.state),
       map(spentFromChannel),
-      toEth
+      mapToExchangeUnit
     )
     .subscribe(totalSent$)
 
@@ -182,7 +224,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     .pipe(
       startWith(pluginAccount.account.outgoing.state),
       map(remainingInChannel),
-      toEth
+      mapToExchangeUnit
     )
     .subscribe(outgoingCapacity$)
 
@@ -194,7 +236,7 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     .pipe(
       startWith(pluginAccount.account.incoming.state),
       map(spentFromChannel),
-      toEth
+      mapToExchangeUnit
     )
     .subscribe(totalReceived$)
 
@@ -206,12 +248,13 @@ export const connectUplink = (credential: ReadyEthereumCredential) => (
     .pipe(
       startWith(pluginAccount.account.incoming.state),
       map(remainingInChannel),
-      toEth
+      mapToExchangeUnit
     )
     .subscribe(incomingCapacity$)
 
   return {
     settlerType: SettlementEngineType.Machinomy,
+    asset,
     credentialId: uniqueId(credential),
     outgoingCapacity$,
     incomingCapacity$,
@@ -229,21 +272,25 @@ export const deposit = (uplink: ReadyMachinomyUplink) => () => async ({
   readonly amount: BigNumber
   readonly authorize: AuthorizeDeposit
 }) => {
-  const fundAmountWei = convert(eth(amount), wei())
-  await uplink.pluginAccount.fundOutgoingChannel(fundAmountWei, async fee => {
-    // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
+  const amountBaseUnits = baseQuantity(exchangeQuantity(uplink.asset, amount))
+    .amount
+  await uplink.pluginAccount.fundOutgoingChannel(
+    amountBaseUnits,
+    async feeWei => {
+      // TODO Check the base layer balance to confirm there's enough $$$ on chain (with fee)!
 
-    await authorize({
-      value: amount,
-      fee: convert(wei(fee), eth())
-    })
-  })
+      await authorize({
+        value: amount,
+        fee: exchangeQuantity(baseQuantity(ethAsset, feeWei))
+      })
+    }
+  )
 
-  // Wait up to 1 minute for incoming capacity to be created
+  // Wait up to 2 minutes for incoming capacity to be created
   await uplink.incomingCapacity$
     .pipe(
       first(amount => amount.isGreaterThan(0)),
-      timeout(60000)
+      timeout(120000)
     )
     .toPromise()
 }
@@ -258,21 +305,23 @@ const withdraw = (uplink: ReadyMachinomyUplink) => async (
   const isAuthorized = new Promise<any>((resolve, reject) => {
     /* tslint:disable-next-line:no-let */
     let claimChannelAuthReady = false
+
     const authorizeOnlyOutgoing = async () =>
       !claimChannelAuthReady &&
       authorize({
         value: uplink.outgoingCapacity$.value,
-        fee: new BigNumber(0)
+        fee: exchangeQuantity(ethAsset, 0)
       }).then(resolve, reject)
 
     claimChannel = uplink.pluginAccount
-      .claimIfProfitable(false, (channel, fee) => {
+      .claimIfProfitable(false, (channel, feeWei) => {
         claimChannelAuthReady = true
+
         const internalAuthorize = authorize({
           value: uplink.outgoingCapacity$.value.plus(
-            convert(wei(channel.spent), eth())
+            exchangeQuantity(baseQuantity(uplink.asset, channel.spent)).amount
           ),
-          fee: convert(wei(fee), eth())
+          fee: exchangeQuantity(baseQuantity(ethAsset, feeWei))
         })
 
         internalAuthorize.then(resolve, reject)
@@ -313,3 +362,21 @@ export const Machinomy = {
   withdraw,
   getBaseBalance
 }
+
+/**
+ * Use the `fast` gasPrice per EthGasStation on mainnet
+ * Fallback to Web3 eth_gasPrice RPC call if it fails
+ */
+export const fetchGasPrice = (
+  ethereumProvider: ethers.providers.Provider
+) => (): Promise<BigNumber> =>
+  axios
+    .get('https://ethgasstation.info/json/ethgasAPI.json')
+    .then(
+      ({ data }) =>
+        baseQuantity(accountQuantity(ethAsset, data.fast / 10)).amount
+    )
+    .catch(async () => bnToBigNumber(await ethereumProvider.getGasPrice()))
+
+const bnToBigNumber = (bn: ethers.utils.BigNumber) =>
+  new BigNumber(bn.toString())

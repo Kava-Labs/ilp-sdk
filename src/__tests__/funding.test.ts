@@ -1,8 +1,14 @@
-import { AssetUnit, convert, usd } from '@kava-labs/crypto-rate-utils'
+import {
+  AssetQuantity,
+  convert,
+  exchangeQuantity,
+  exchangeUnit
+} from '@kava-labs/crypto-rate-utils'
 import anyTest, { ExecutionContext, TestInterface } from 'ava'
 import BigNumber from 'bignumber.js'
-import { connect, LedgerEnv, ReadyUplinks, IlpSdk } from '..'
-import { addEth, addXrp, captureFeesFrom } from './helpers'
+import { connect, IlpSdk, LedgerEnv, ReadyUplinks } from '..'
+import { usdAsset } from '../assets'
+import { addDai, addEth, addXrp, captureFeesFrom } from './helpers'
 require('envkey')
 
 const test = anyTest as TestInterface<IlpSdk>
@@ -19,26 +25,26 @@ test.afterEach(async t => t.context.disconnect())
 export const testFunding = (
   createUplink: (api: IlpSdk) => Promise<ReadyUplinks>
 ) => async (t: ExecutionContext<IlpSdk>) => {
-  // SETUP ------------------------------------------
-
   const { state, deposit, withdraw, streamMoney, getBaseBalance } = t.context
   const uplink = await createUplink(t.context)
 
-  const settler = state.settlers[uplink.settlerType]
-
   // Instead down to the base unit of the ledger if there's more precision than that
-  const toUplinkUnit = (unit: AssetUnit) =>
-    convert(unit, settler.exchangeUnit(), state.rateBackend).decimalPlaces(
-      settler.exchangeUnit().exchangeUnit,
-      BigNumber.ROUND_DOWN
-    )
-  // capture reported fee from deposit and withdraw functions
+  const toUplinkUnit = (unit: AssetQuantity) =>
+    convert(
+      unit,
+      exchangeUnit(uplink.asset),
+      state.rateBackend
+    ).amount.decimalPlaces(uplink.asset.exchangeScale, BigNumber.ROUND_DOWN)
+
   const depositAndCapture = (amount: BigNumber) =>
     captureFeesFrom(authorize => deposit({ uplink, amount, authorize }))
+
   const withdrawAndCapture = () =>
     captureFeesFrom(authorize => withdraw({ uplink, authorize }))
 
-  // TEST DEPOSIT (CHANNEL OPEN) ---------------------
+  /**
+   * Test deposit (channel open)
+   */
 
   t.true(uplink.balance$.value.isZero(), 'initial layer 2 balance is 0')
 
@@ -46,55 +52,74 @@ export const testFunding = (
   // e.g. openAmount === "2.959676012", uplink.balance$ === "2.959676"
 
   const initialBaseBalance = await getBaseBalance(uplink)
-  const openAmount = toUplinkUnit(usd(1))
-  const channelOpenValueAndFee = await depositAndCapture(openAmount)
+  const openAmount = toUplinkUnit(exchangeQuantity(usdAsset, 1))
+  const channelOpenFee = await depositAndCapture(openAmount)
 
   t.true(
     uplink.balance$.value.isEqualTo(openAmount),
     'balance$ correctly reflects the initial channel open'
   )
+
   const baseBalanceAfterOpen = await getBaseBalance(uplink)
-  t.true(
-    initialBaseBalance
-      .minus(baseBalanceAfterOpen)
-      .isEqualTo(openAmount.plus(channelOpenValueAndFee.fee)),
-    'after channel open, base balance is reduced by exactly the reported fee + open amount'
+  const baseBalanceDecreaseAfterOpen = initialBaseBalance.amount.minus(
+    baseBalanceAfterOpen.amount
   )
+
+  // For Machinomy, base balance is in ETH, but deposits may be denominated in an ERC-20. If so, only check the fee
+  const expectedBaseBalanceDecreaseAfterOpen =
+    baseBalanceAfterOpen.symbol === uplink.asset.symbol
+      ? openAmount.plus(channelOpenFee.amount)
+      : channelOpenFee.amount
+
+  // For Machinomy, one-time "unlocking" of ERC-20 transfers requires over-estimating the fee, so must use inequality
   t.true(
-    openAmount.isEqualTo(channelOpenValueAndFee.value),
-    'authorize reports correct value for open amount'
+    baseBalanceDecreaseAfterOpen.isLessThanOrEqualTo(
+      expectedBaseBalanceDecreaseAfterOpen
+    ),
+    'after channel open, base balance is reduced by no more than the reported fee + open amount'
   )
+
   t.true(
     uplink.incomingCapacity$.value.isGreaterThan(new BigNumber(0)),
-    'there is incoming capacity to us after a deposit'
+    'peer opens incoming capacity after a deposit'
   )
 
-  // TEST DEPOSIT (TOP UP) ----------------------------
+  /**
+   * Test deposit (top up)
+   */
 
-  const depositAmount = toUplinkUnit(usd(2))
-  const depositValueAndFee = await depositAndCapture(depositAmount)
+  const depositAmount = toUplinkUnit(exchangeQuantity(usdAsset, 2))
+  const depositFee = await depositAndCapture(depositAmount)
+
   t.true(
     uplink.balance$.value.isEqualTo(openAmount.plus(depositAmount)),
     'balance$ correctly reflects the deposit to the channel'
   )
+
   const baseBalanceAfterDeposit = await getBaseBalance(uplink)
+  const baseBalanceDecreaseAfterDeposit = baseBalanceAfterOpen.amount.minus(
+    baseBalanceAfterDeposit.amount
+  )
+  const expectedBaseBalanceDecreaseAfterDeposit =
+    baseBalanceAfterDeposit.symbol === uplink.asset.symbol
+      ? depositAmount.plus(depositFee.amount)
+      : depositFee.amount
+
   t.true(
-    baseBalanceAfterOpen
-      .minus(baseBalanceAfterDeposit)
-      .isEqualTo(depositAmount.plus(depositValueAndFee.fee)),
+    baseBalanceDecreaseAfterDeposit.isEqualTo(
+      expectedBaseBalanceDecreaseAfterDeposit
+    ),
     'after deposit, base balance is reduced by exactly the reported fee + deposit amount'
   )
-  t.true(
-    depositAmount.isEqualTo(depositValueAndFee.value),
-    'authorize reports correct value for deposit amount'
-  )
 
-  // TEST WITHDRAW ----------------------------------------
+  /**
+   * Test withdraw
+   */
 
   // Rebalance so there's some money in both the incoming & outgoing channels
   await t.notThrowsAsync(
     streamMoney({
-      amount: toUplinkUnit(usd(1.1)),
+      amount: toUplinkUnit(exchangeQuantity(usdAsset, 1.1)),
       source: uplink,
       dest: uplink
     }),
@@ -102,30 +127,35 @@ export const testFunding = (
   )
 
   const withdrawAmount = uplink.balance$.value
-  const withdrawValueAndFee = await withdrawAndCapture()
+  const withdrawFee = await withdrawAndCapture()
 
   t.true(
     uplink.balance$.value.isZero(),
     'balance$ of uplink goes back to zero following a withdraw'
   )
+
   const baseBalanceAfterWithdraw = await getBaseBalance(uplink)
+  const baseBalanceIncreaseAfterWithdraw = baseBalanceAfterWithdraw.amount.minus(
+    baseBalanceAfterDeposit.amount
+  )
+  const expectedBaseBalanceIncreaseAfterWithdraw =
+    baseBalanceAfterWithdraw.symbol === uplink.asset.symbol
+      ? withdrawAmount.minus(withdrawFee.amount)
+      : withdrawFee.amount.negated()
+
   t.true(
-    baseBalanceAfterWithdraw
-      .minus(baseBalanceAfterDeposit)
-      .isLessThanOrEqualTo(withdrawAmount),
+    baseBalanceIncreaseAfterWithdraw.isLessThanOrEqualTo(withdrawAmount),
     'after withdraw, base balance is increased no more than the withdraw amount'
   )
+
   t.true(
-    baseBalanceAfterWithdraw
-      .minus(baseBalanceAfterDeposit)
-      .isGreaterThanOrEqualTo(withdrawAmount.minus(withdrawValueAndFee.fee)),
+    baseBalanceIncreaseAfterWithdraw.isGreaterThanOrEqualTo(
+      expectedBaseBalanceIncreaseAfterWithdraw
+    ),
     'after withdraw, base balance is increased by at least the withdraw amount minus reported fee'
-  )
-  t.true(
-    withdrawAmount.isEqualTo(withdrawValueAndFee.value),
-    'authorize reports correct value for withdraw amount'
   )
 }
 
+test('dai: deposit & withdraw', testFunding(addDai()))
 test('eth: deposit & withdraw', testFunding(addEth()))
 test('xrp: deposit & withdraw', testFunding(addXrp()))

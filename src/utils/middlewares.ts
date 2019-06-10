@@ -17,7 +17,7 @@ BigNumber.config({ EXPONENTIAL_AT: 1e9 })
 
 export interface PluginWrapperOpts {
   readonly plugin: Plugin
-  readonly maxBalance: BigNumber.Value
+  readonly maxBalance?: BigNumber.Value
   readonly maxPacketAmount: BigNumber.Value
   readonly log: Logger
   readonly assetCode: string
@@ -84,7 +84,7 @@ export class PluginWrapper {
 
   constructor({
     plugin,
-    maxBalance,
+    maxBalance = Infinity,
     maxPacketAmount,
     log,
     store,
@@ -109,7 +109,10 @@ export class PluginWrapper {
     )
 
     /** Receivable balance (incoming/clearing) */
-    this.maxBalance = new BigNumber(maxBalance).dp(0, BigNumber.ROUND_FLOOR)
+    this.maxBalance = new BigNumber(maxBalance).decimalPlaces(
+      0,
+      BigNumber.ROUND_FLOOR
+    )
     this.receivableBalance$ = new BehaviorSubject(
       new BigNumber(this.store.getSync('receivableBalance') || 0)
     )

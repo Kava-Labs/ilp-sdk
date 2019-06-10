@@ -1,4 +1,8 @@
-import { btc, convert, satoshi } from '@kava-labs/crypto-rate-utils'
+import {
+  exchangeQuantity,
+  baseQuantity,
+  AssetQuantity
+} from '@kava-labs/crypto-rate-utils'
 import BigNumber from 'bignumber.js'
 import { Option, tryCatch } from 'fp-ts/lib/Option'
 import LightningPlugin, {
@@ -16,12 +20,16 @@ import { BehaviorSubject, from, fromEvent, interval, merge } from 'rxjs'
 import { filter, mergeMap, throttleTime } from 'rxjs/operators'
 import { URL } from 'url'
 import { promisify } from 'util'
-import { LedgerEnv, State } from '..'
+import { State, LedgerEnv } from '..'
 import { SettlementEngine, SettlementEngineType } from '../engine'
 import { Flavor } from '../types/util'
 import { BaseUplink, BaseUplinkConfig, ReadyUplink } from '../uplink'
 import createLogger from '../utils/log'
 import { MemoryStore } from '../utils/store'
+import { btcAsset } from '../assets'
+
+const satToBtc = (amount: BigNumber.Value): AssetQuantity =>
+  exchangeQuantity(baseQuantity(btcAsset, amount))
 
 /*
  * ------------------------------------
@@ -36,22 +44,7 @@ export interface LndSettlementEngine extends SettlementEngine {
 const setupEngine = async (
   ledgerEnv: LedgerEnv
 ): Promise<LndSettlementEngine> => ({
-  settlerType: SettlementEngineType.Lnd,
-  assetCode: 'BTC',
-  assetScale: 8,
-  baseUnit: satoshi,
-  exchangeUnit: btc,
-  remoteConnectors: {
-    local: {
-      'Kava Labs': (token: string) => `btp+ws://:${token}@localhost:7441`
-    },
-    testnet: {
-      'Kava Labs': (token: string) => `btp+wss://:${token}@test.ilp.kava.io/btc`
-    },
-    mainnet: {
-      'Kava Labs': (token: string) => `btp+wss://:${token}@ilp.kava.io/btc`
-    }
-  }[ledgerEnv]
+  settlerType: SettlementEngineType.Lnd
 })
 
 /*
@@ -91,25 +84,34 @@ export type LndIdentityPublicKey = Flavor<string, 'LndIdentityPublicKey'>
 
 export interface ReadyLndCredential {
   readonly settlerType: SettlementEngineType.Lnd
+
   /** gRPC client for raw RPC calls */
   readonly grpcClient: GrpcClient
+
   /** Wrapped gRPC client in a Lightning RPC service with typed methods and messages */
   readonly service: LndService
+
   /** Bidirectional streaming RPC to send outgoing payments and receive attestations */
   readonly paymentStream: PaymentStream
+
   /** Streaming RPC of newly added or settled invoices */
   readonly invoiceStream: InvoiceStream
+
   /** Lightning secp256k1 public key */
   readonly identityPublicKey: LndIdentityPublicKey
+
   /** Streaming updates of balance in channel */
   readonly channelBalance$: BehaviorSubject<BigNumber>
+
   /** TODO */
   readonly config: ValidatedLndCredential
 }
 
-const fetchChannelBalance = async (lightning: LndService) => {
+const fetchChannelBalance = async (
+  lightning: LndService
+): Promise<BigNumber> => {
   const res = await lightning.channelBalance({})
-  return convert(satoshi(res.balance.toString()), btc())
+  return satToBtc(res.balance.toString()).amount
 }
 
 const uniqueId = (cred: ReadyLndCredential): LndIdentityPublicKey =>
@@ -217,6 +219,7 @@ const connectUplink = (credential: ReadyLndCredential) => (
 
   return {
     settlerType: SettlementEngineType.Lnd,
+    asset: btcAsset,
     credentialId: uniqueId(credential),
     plugin,
     outgoingCapacity$,
@@ -226,13 +229,12 @@ const connectUplink = (credential: ReadyLndCredential) => (
   }
 }
 
-export const getBaseBalance = async (credential: ReadyLndCredential) => {
+export const getBaseBalance = async (
+  credential: ReadyLndCredential
+): Promise<AssetQuantity> => {
   const lndService = credential.service
   const baseBalance = await lndService.walletBalance({})
-  return convert(
-    satoshi(new BigNumber(baseBalance.confirmedBalance.toString())),
-    btc()
-  )
+  return satToBtc(baseBalance.confirmedBalance.toString())
 }
 
 /**
